@@ -9,7 +9,7 @@ function setMenu(open, returnFocus = false) {
 }
 function resetMenu() { setMenu(false); }
 menuToggle.addEventListener('click', () => setMenu(menuToggle.getAttribute('aria-expanded') !== 'true'));
-navigation.addEventListener('click', event => { if (event.target.closest('a')) setMenu(false); });
+document.querySelector('.header').addEventListener('click', event => { if (event.target.closest('a')) setMenu(false); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && menuToggle.getAttribute('aria-expanded') === 'true') setMenu(false, true); });
 document.addEventListener('click', event => { if (!event.target.closest('.header')) setMenu(false); });
 mobileMedia.addEventListener('change', resetMenu);
