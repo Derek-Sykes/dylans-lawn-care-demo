@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply and verify the published Dylan demo release
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dylan-demo-update
+TimeoutStartSec=8min
+UMask=0077

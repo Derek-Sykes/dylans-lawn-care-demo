@@ -1,16 +1,108 @@
-name: Check website container
+name: Website checks and deployment
 on:
   push:
     branches: [dev, main]
   pull_request:
+    branches: [dev, main]
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   container:
+    name: Check website container
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build and verify the packaged website
         shell: pwsh
         run: ./website.ps1 check -NoOpen
+  release:
+    name: Publish and deploy to Oracle
+    needs: container
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://demo.xsolutionsmd.com
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in with the temporary workflow token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build and publish the tested revision
+        id: image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/derek-sykes/dylans-lawn-care-demo:sha-${{ github.sha }}
+          build-args: REVISION=${{ github.sha }}
+      - name: Publish the release instruction
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          main=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ "$main" != "$GITHUB_SHA" ]]; then
+            echo 'A newer main commit exists; skipping this release.'
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n --arg revision "$GITHUB_SHA" --arg image "ghcr.io/derek-sykes/dylans-lawn-care-demo@$IMAGE_DIGEST" \
+            '{revision:$revision,image:$image}' > deployment.json
+          tag="release-$GITHUB_SHA"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" deployment.json --clobber
+            gh release edit "$tag" --latest
+          else
+            gh release create "$tag" deployment.json --target "$GITHUB_SHA" --latest \
+              --title "Demo ${GITHUB_SHA:0:7}" --notes 'Tested website container. Oracle applies this exact image and verifies the demo over HTTPS.'
+          fi
+      - name: Wait for Oracle and verify the live revision
+        if: steps.release.outputs.skip != 'true'
+        env:
+          EXPECTED: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          ORACLE_HOST: ${{ vars.ORACLE_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$ORACLE_HOST"
+          for attempt in $(seq 1 60); do
+            main=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+            if [[ "$main" != "$EXPECTED" ]]; then
+              echo 'Superseded by a newer main commit; its workflow will verify deployment.'
+              exit 0
+            fi
+            actual=$(curl -fsS --max-time 10 --resolve "demo.xsolutionsmd.com:443:$ORACLE_HOST" \
+              "https://demo.xsolutionsmd.com/version.json?release=$EXPECTED" | jq -r .revision) || actual=''
+            if [[ "$actual" == "$EXPECTED" ]]; then
+              curl -fsS --max-time 10 --resolve "demo.xsolutionsmd.com:443:$ORACLE_HOST" \
+                https://demo.xsolutionsmd.com/ -D live.headers -o live.html
+              cmp live.html dist/index.html
+              grep -Eiq '^x-robots-tag:.*noindex' live.headers
+              echo "Verified Oracle serves $EXPECTED over HTTPS."
+              echo "Deployed **$EXPECTED** to https://demo.xsolutionsmd.com" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'Oracle did not serve this revision within ten minutes. Inspect dylan-demo-update.service on Oracle.' >&2
+          exit 1
+      - name: Clear registry login
+        if: always()
+        run: docker logout ghcr.io

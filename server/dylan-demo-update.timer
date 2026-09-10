@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a published Dylan demo release every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=dylan-demo-update.service
+
+[Install]
+WantedBy=timers.target

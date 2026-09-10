@@ -1,0 +1,22 @@
+name: dylan-demo
+services:
+  web:
+    image: ${DYLAN_IMAGE:?Set DYLAN_IMAGE to the tested release digest}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /data
+      - /config
+    networks:
+      proxy:
+        aliases:
+          - dylan-demo
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "2"
+networks:
+  proxy:
+    external: true
+    name: xsolutions-proxy
