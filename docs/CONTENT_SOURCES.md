@@ -19,10 +19,11 @@ The local JPEGs are unaltered copies of the Facebook-displayed work photos, crop
 | `dist/assets/project-lawn.jpg` | [Facebook photo 2056320515277143](https://www.facebook.com/photo/?fbid=2056320515277143&set=pb.100026976437278.-2207520000) | Brick home with shaped shrubs and mulch beds |
 | `dist/assets/project-landscape.jpg` | [Facebook photo 2056320478610480](https://www.facebook.com/photo/?fbid=2056320478610480&set=pb.100026976437278.-2207520000) | Garden island and broad lawn |
 | `dist/assets/project-yard.jpg` | [Facebook photo 2056320405277154](https://www.facebook.com/photo/?fbid=2056320405277154&set=pb.100026976437278.-2207520000) | Maintained beds and lawn around red farm buildings |
+| `dist/assets/project-garden.jpg` | [Facebook photo 2056320428610485](https://www.facebook.com/photo/?fbid=2056320428610485&set=pb.100026976437278.-2207520000) | Maintained grass and mulch around established trees beside a gazebo |
 
 Private demonstration use is authorized by the commissioning user. This is not evidence of permission from the business or rights holders for public publication. Obtain owner approval of selected copy, images and testimonials before an actual launch. Exact source exports remain outside this repository. No competitor text, logos or photographs were copied.
 
-The September 10 redesign promotes `project-lawn.jpg` to the wide opening photograph and moves `hero-lawn.jpg` into the main gallery position. The files themselves are unchanged; names continue to identify their original source exports.
+The later September 10 motion refinement replaces the house-dominated opening. Its first frame uses the lawn and mulch-edge portion of `project-yard.jpg` on desktop, with `hero-lawn.jpg` selected for the narrower mobile crop. `project-landscape.jpg` and `project-garden.jpg` complete a repeating still-photo sequence. These are CSS crops of authentic, unaltered source photographs, not footage of work in progress. The four-photo project reel uses those same actual work images; captions have no numeric prefixes or counters. `project-lawn.jpg` is retained as a historical source asset and is no longer shown on the page.
 
 ## Design references
 
@@ -30,11 +31,15 @@ The September 10 redesign was informed by visual inspection of the user's Dribbb
 
 These are design references, not evidence of Dylan's services or business results. No reference images, copy, branding, code, forms, prices, badges or business statistics were copied. Existing factual content and original assets remain the source for the demo.
 
+The later motion work also follows the user's existing [Augusta Lawn Care of Tracy page](https://www.augustalawncareservices.com/tracy). A complete Chrome scroll-through observed its looping work-video hero, opposite-side panel assembly, scaling comparison panel, sliding review cards, side-entering photo/contact composition, and repeated mowing mascot beside its FAQ. Dylan's adaptation retains its forest/lime identity: a wiping sequence of actual still photos, side entrances and staggered cards, a swipeable/keyboard-controlled automatic photo reel, and its own existing animated flower/mower beside the FAQ. Timed entrances are adaptations; they do not reproduce Augusta's scroll-progress system. No Augusta media, artwork, code or business claims were copied.
+
+The reel rotates every 4.6 seconds while visible, with arrow/dot selection, keyboard navigation and horizontal pointer swipes. Manual browsing pauses automatic rotation; an explicit play control resumes it. Global motion controls also stop the hero's 6.2-second photo changes, ribbon, seasonal type and decorative loops. Reduced-motion preferences disable automatic movement; without JavaScript, the work images remain a readable grid and the page's CSS animations remain static.
+
 ## Decorative headline illustration
 
 `dist/assets/headline-lawn.png` is a generated grass, flower and push-mower ornament requested for the headline. It is decorative, not a business project photograph. The built-in image-generation tool produced the original transparent PNG and the later `headline-lawn-color.png` edit with yellow petals and a red-and-black mower. The color edit contains an opaque checkerboard, so it is always displayed through the original PNG's genuine alpha mask; it must not be shown directly. Both assets share the same canvas and closely aligned silhouettes.
 
-CSS clips this artwork into flower, grass and mower layers for a repeating 7.6-second animation requested on September 10: a full stop rises into the flower, the lawn grows and the mower arrives. The scene rests briefly, returns to the full stop and repeats indefinitely. Reduced-motion settings show the finished static scene immediately. Its 1.1em width scales with the headline, and its decorative layers are hidden from assistive technology. The four Facebook project photos remain unchanged. Prompts, original assets and inspection records are retained outside this repository in the local client research folder.
+CSS clips this artwork into flower, grass and mower layers for a repeating 7.6-second animation requested on September 10: a full stop rises into the flower, the lawn grows and the mower arrives. The scene rests briefly, returns to the full stop and repeats indefinitely. Reduced-motion settings show the finished static scene immediately. Its 1.1em width scales with the headline, and its decorative layers are hidden from assistive technology. The same art also appears beside the FAQ. Facebook project photos remain unaltered. Prompts, original assets and inspection records are retained outside this repository in the local client research folder.
 
 The same request removed visitor-facing preview/demo wording from the top banner and footer. This is a presentation change; the local-only hosting and noindex controls remain in place.
 
