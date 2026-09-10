@@ -2,6 +2,7 @@ FROM caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95a
 ARG REVISION=local
 LABEL org.opencontainers.image.title="Dylan's Lawn Care website demo"
 LABEL org.opencontainers.image.revision=$REVISION
+LABEL org.opencontainers.image.source="https://github.com/Derek-Sykes/dylans-lawn-care-demo"
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY dist/ /srv/
 RUN printf '{"revision":"%s"}\n' "$REVISION" > /opt/site-version.json

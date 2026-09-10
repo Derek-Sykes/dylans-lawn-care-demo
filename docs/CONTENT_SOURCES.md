@@ -47,6 +47,8 @@ CSS clips this artwork into flower, grass and mower layers for a repeating 7.6-s
 
 The same request removed visitor-facing preview/demo wording from the top banner and footer. This is a presentation change; the local-only hosting and noindex controls remain in place.
 
+The later September 10 request authorizes the public demonstration at `demo.xsolutionsmd.com` and automatic main releases on Oracle, superseding that local-only boundary. Existing noindex controls and the requested visible presentation remain unchanged. This hosting authorization does not establish final owner approval or a paid client launch.
+
 ## Contact behavior
 
 Phone actions use `tel:+14103651265`. Facebook links open the verified business profile, whose Message control was visible. The page explains that Facebook may require sign-in. No phone call, message, form receipt or booked service has been tested or claimed. The site has no submission backend and collects no visitor data.
