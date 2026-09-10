@@ -35,6 +35,16 @@ The website is static: there are no accounts, database, uploaded leads, stored m
 
 Develop on `dev` or a focused feature branch targeting `dev`. Review and commit changes, then push to the dedicated private client repository when configured. On a second computer, clone its **dev** branch, start Docker Desktop and run `start.bat`. Use `update.bat` thereafter.
 
+The private repository is [Derek-Sykes/dylans-lawn-care-demo](https://github.com/Derek-Sykes/dylans-lawn-care-demo), with `dev` as its default branch. Authenticate GitHub on the second computer, then clone once:
+
+```powershell
+git clone --branch dev https://github.com/Derek-Sykes/dylans-lawn-care-demo.git
+cd dylans-lawn-care-demo
+.\start.bat
+```
+
+The GitHub **Check website container** workflow also has a **Run workflow** button for an on-demand check. It performs no publication. A manually triggered check passed for the delivery; do not confuse that observed run with a separately verified push-trigger test.
+
 The updater follows the current `dev` or `main` branch. It refuses uncommitted/untracked work, feature branches, and history that cannot safely advance to the remote. It fetches and fast-forwards, builds and verifies a candidate, then replaces this local container. A failed build leaves the prior packaged container running; source may already have advanced. It never force-resets Git or removes unrelated Docker resources. In dev mode, edits are visible immediately because its source is mounted.
 
 The included GitHub check builds the container, verifies the exact files and source revision, tests health and demo indexing headers, and checks private files are inaccessible. It has read-only repository permission. **There is no publish or deploy job, including on main.** Main remains reserved for a separately approved release. Repository protection settings must be configured/verified on the eventual private remote; files alone do not enforce them.
