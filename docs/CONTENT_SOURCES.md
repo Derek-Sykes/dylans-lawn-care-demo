@@ -34,7 +34,9 @@ These are design references, not evidence of Dylan's services or business result
 
 `dist/assets/headline-lawn.png` is a generated grass, flower and push-mower ornament requested for the headline. It is decorative, not a business project photograph. The built-in image-generation tool produced the original transparent PNG and the later `headline-lawn-color.png` edit with yellow petals and a red-and-black mower. The color edit contains an opaque checkerboard, so it is always displayed through the original PNG's genuine alpha mask; it must not be shown directly. Both assets share the same canvas and closely aligned silhouettes.
 
-CSS clips this artwork into flower, grass and mower layers for a single 4.6-second opening animation: a full stop rises into the flower, the lawn grows and the mower arrives. The completed scene stays still, and reduced-motion settings show it immediately. Its 1.1em width scales with the headline, and its decorative layers are hidden from assistive technology. The four Facebook project photos remain unchanged. Prompts, original assets and inspection records are retained outside this repository in the local client research folder.
+CSS clips this artwork into flower, grass and mower layers for a repeating 7.6-second animation requested on September 10: a full stop rises into the flower, the lawn grows and the mower arrives. The scene rests briefly, returns to the full stop and repeats indefinitely. Reduced-motion settings show the finished static scene immediately. Its 1.1em width scales with the headline, and its decorative layers are hidden from assistive technology. The four Facebook project photos remain unchanged. Prompts, original assets and inspection records are retained outside this repository in the local client research folder.
+
+The same request removed visitor-facing preview/demo wording from the top banner and footer. This is a presentation change; the local-only hosting and noindex controls remain in place.
 
 ## Contact behavior
 
