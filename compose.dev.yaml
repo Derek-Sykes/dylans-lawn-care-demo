@@ -1,0 +1,7 @@
+services:
+  web:
+    volumes:
+      - type: bind
+        source: ./dist
+        target: /srv
+        read_only: true

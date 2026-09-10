@@ -1,0 +1,15 @@
+name: Check website container
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and verify the packaged website
+        shell: pwsh
+        run: ./website.ps1 check -NoOpen

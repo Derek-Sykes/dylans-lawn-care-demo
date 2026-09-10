@@ -1,0 +1,20 @@
+name: ${DYLAN_PROJECT:-dylans-lawn-demo}
+services:
+  web:
+    build:
+      context: .
+      args:
+        REVISION: ${DYLAN_REVISION:-local}
+    image: ${DYLAN_PROJECT:-dylans-lawn-demo}:local
+    ports:
+      - "127.0.0.1:${DYLAN_PORT:-4177}:8080"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /data
+      - /config
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "2"
