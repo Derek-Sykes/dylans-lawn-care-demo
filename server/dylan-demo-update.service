@@ -8,4 +8,5 @@ Requires=docker.service
 Type=oneshot
 ExecStart=/usr/local/sbin/dylan-demo-update
 TimeoutStartSec=8min
+TimeoutStopSec=2min
 UMask=0077
