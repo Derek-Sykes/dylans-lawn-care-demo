@@ -20,7 +20,7 @@ demo.xsolutionsmd.com {
 }
 ```
 
-DNS for `demo.xsolutionsmd.com` points to Oracle. The proxy owns public ports 80/443 and TLS; the demo container publishes no host ports. Its internal HTTP server has no certificate volume. The company website is a separate service with a different network alias and independent release workflow. An unknown future demo address needs its own DNS/routing rule and unique container alias.
+DNS for `demo.xsolutionsmd.com` points to Oracle. The proxy owns public ports 80/443 and TLS; the demo container publishes no host ports. Its internal HTTP server has no certificate volume. The company website is a separate service with a different network alias and independent release workflow. The shared wildcard DNS record is intended to cover future demo subdomains. Each additional website still needs an explicit gateway route and a unique container alias; existing explicit DNS records take precedence over the wildcard.
 
 Configure Actions variable `ORACLE_HOST` to the Oracle public IP, set the GHCR package to public, protect `main` with pull requests and **Check website container**, and restrict the `production` environment to `main`. These GitHub settings must be verified independently of files in this repository.
 
