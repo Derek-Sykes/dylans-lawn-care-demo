@@ -14,3 +14,28 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape' && me
 document.addEventListener('click', event => { if (!event.target.closest('.header')) setMenu(false); });
 mobileMedia.addEventListener('change', resetMenu);
 resetMenu();
+
+// Only defer elements below the viewport; content remains visible without JS.
+const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+if (!motionPreference.matches && 'IntersectionObserver' in window) {
+  const reveals = document.querySelectorAll('.reveal');
+  const revealObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.remove('is-pending');
+      revealObserver.unobserve(entry.target);
+    });
+  }, { threshold: 0.08 });
+  reveals.forEach(element => {
+    if (element.getBoundingClientRect().top >= window.innerHeight) {
+      element.classList.add('is-pending');
+      revealObserver.observe(element);
+    }
+  });
+  motionPreference.addEventListener('change', event => {
+    if (event.matches) {
+      reveals.forEach(element => element.classList.remove('is-pending'));
+      revealObserver.disconnect();
+    }
+  });
+}

@@ -22,6 +22,14 @@ The local JPEGs are unaltered copies of the Facebook-displayed work photos, crop
 
 Private demonstration use is authorized by the commissioning user. This is not evidence of permission from the business or rights holders for public publication. Obtain owner approval of selected copy, images and testimonials before an actual launch. Exact source exports remain outside this repository. No competitor text, logos or photographs were copied.
 
+The September 10 redesign promotes `project-lawn.jpg` to the wide opening photograph and moves `hero-lawn.jpg` into the main gallery position. The files themselves are unchanged; names continue to identify their original source exports.
+
+## Design references
+
+The September 10 redesign was informed by visual inspection of the user's Dribbble lawn-care search in Chrome. The principal references were [Vertdure by MamboMambo](https://dribbble.com/shots/27485807-Vertdure-Site) for mixed sans-serif/italic typography and rounded photo panels; [EarthSlice by JA. Parvez for Wingly](https://dribbble.com/shots/26980237-EarthSlice-Lawn-Care-Landing-Page-Scroll-Animation) for rating/contact prominence and short content reveals; and [GreenOasis by Mirhayot for Eloqwnt](https://dribbble.com/shots/24620053-GreenOasis-Lawn-Care-Company-Website) for featured-project image hierarchy. [Tusher Sardar's lawn-care concept](https://dribbble.com/shots/27186010-Lawn-Care-Landscaping-Website-Design) and [FleexStudio's lawn-care business concept](https://dribbble.com/shots/26673502-Landscaping-Lawn-Care-Business-Website-Design) also informed section rhythm and service clarity.
+
+These are design references, not evidence of Dylan's services or business results. No reference images, copy, branding, code, forms, prices, badges or business statistics were copied. Existing factual content and original assets remain the source for the demo.
+
 ## Decorative headline illustration
 
 `dist/assets/headline-lawn.png` is a generated grass, flower and push-mower ornament requested for the headline. It is decorative, not a business project photograph. The built-in image-generation tool produced the original transparent PNG and the later `headline-lawn-color.png` edit with yellow petals and a red-and-black mower. The color edit contains an opaque checkerboard, so it is always displayed through the original PNG's genuine alpha mask; it must not be shown directly. Both assets share the same canvas and closely aligned silhouettes.
