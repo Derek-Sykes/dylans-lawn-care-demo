@@ -14,6 +14,7 @@ candidate="dylan-demo-candidate-$$"
 deployment_started=false
 committed=false
 had_previous=false
+had_current=false
 compose=(docker compose --project-name dylan-demo --project-directory "$root" --env-file "$root/release.env" -f "$root/compose.yaml")
 next_compose=(docker compose --project-name dylan-demo --project-directory "$root" --env-file "$work/next.env" -f "$work/next-compose.yaml")
 rollback() {
@@ -21,21 +22,33 @@ rollback() {
     echo 'New release failed; restoring the previous demo container definition.' >&2
     cp "$work/previous-compose.yaml" "$root/compose.yaml" || return 1
     cp "$work/previous.env" "$root/release.env" || return 1
-    "${compose[@]}" up -d --no-build --wait --wait-timeout 90
+    "${compose[@]}" up -d --no-build --wait --wait-timeout 90 || return 1
   else
     echo 'First release failed; removing only its unsuccessful demo container.' >&2
     "${next_compose[@]}" rm --stop --force web || return 1
-    rm -f -- "$root/compose.yaml" "$root/release.env"
+    rm -f -- "$root/compose.yaml" "$root/release.env" || return 1
+  fi
+  if [[ "$had_current" == true ]]; then
+    cp "$work/previous-current.json" "$state/current.json.new" || return 1
+    mv "$state/current.json.new" "$state/current.json" || return 1
+  else
+    rm -f -- "$state/current.json" "$state/current.json.new" || return 1
   fi
 }
 cleanup() {
   status=$?
   trap - EXIT
+  trap '' TERM INT
+  recovered=true
   if [[ "$deployment_started" == true && "$committed" != true ]]; then
-    if ! rollback; then echo 'Automatic recovery failed; inspect dylan-demo-update.service immediately.' >&2; fi
+    if ! rollback; then
+      recovered=false
+      status=1
+      echo "Automatic recovery failed; recovery files retained in $work. Inspect dylan-demo-update.service immediately." >&2
+    fi
   fi
-  docker rm -f "$candidate" >/dev/null 2>&1 || true
-  rm -rf -- "$work"
+  docker rm -f -v "$candidate" >/dev/null 2>&1 || true
+  if [[ "$recovered" == true ]]; then rm -rf -- "$work"; fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -70,7 +83,7 @@ docker pull "$image"
 [[ $(docker image inspect "$image" --format '{{.Architecture}}') == arm64 ]]
 [[ $(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}') == "$revision" ]]
 [[ $(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.source"}}') == "https://github.com/$repo" ]]
-docker run --rm --entrypoint caddy "$image" validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker run --rm --tmpfs /data --tmpfs /config --entrypoint caddy "$image" validate --config /etc/caddy/Caddyfile --adapter caddyfile
 # The candidate uses a random loopback port and no public proxy network.
 docker run -d --name "$candidate" --read-only --tmpfs /tmp --tmpfs /data --tmpfs /config -p 127.0.0.1::8080 "$image"
 port=$(docker port "$candidate" 8080/tcp | awk -F: '{print $NF}')
@@ -86,7 +99,7 @@ actual=$(curl -fsS --max-time 10 "http://127.0.0.1:$port/version.json" | python3
 curl -fsS --max-time 10 "http://127.0.0.1:$port/" -D "$work/candidate.headers" -o "$work/candidate.html"
 test -s "$work/candidate.html"
 grep -Eiq '^x-robots-tag:.*noindex' "$work/candidate.headers"
-docker rm -f "$candidate" >/dev/null
+docker rm -f -v "$candidate" >/dev/null
 [[ "$revision" == "$(current_main)" ]] || { echo 'A newer main commit arrived; keeping the existing demo.'; exit 0; }
 if [[ -f "$root/compose.yaml" && -f "$root/release.env" ]]; then
   had_previous=true
@@ -98,6 +111,10 @@ elif [[ -e "$root/compose.yaml" || -e "$root/release.env" ]]; then
 elif [[ -n $(docker ps -aq --filter label=com.docker.compose.project=dylan-demo) ]]; then
   echo 'A demo container exists without recovery files; repair before updating.' >&2
   exit 1
+fi
+if [[ -f "$state/current.json" ]]; then
+  cp "$state/current.json" "$work/previous-current.json"
+  had_current=true
 fi
 cp /usr/local/share/dylan-demo/compose.yaml "$work/next-compose.yaml"
 printf 'DYLAN_IMAGE=%s\n' "$image" > "$work/next.env"
