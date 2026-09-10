@@ -133,7 +133,7 @@
 .contact-grid.reveal{transition:opacity 1s,transform 1.1s cubic-bezier(.16,1,.3,1),clip-path 1.1s cubic-bezier(.16,1,.3,1)}
 .contact-grid.reveal.is-pending{opacity:1;transform:translateY(65px);clip-path:inset(0 12% 0 12% round 60px)}
 .contact-grid.reveal:not(.is-pending){clip-path:inset(0 round 30px)}
-.faq-lawn{position:relative;width:190px;height:76px;margin-top:35px;font-size:172px;isolation:isolate}
+
 .faq-list details[open] p{animation:answer-open .4s cubic-bezier(.2,.7,.2,1) both}
 @keyframes answer-open{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
 .motion-paused *,.motion-paused *:before,.motion-paused *:after{animation-play-state:paused!important}
@@ -142,7 +142,7 @@
   .project-reel.is-ready .reel-stage{height:490px}.project-reel.is-ready .reel-card{height:400px;width:62%;top:35px}.reel-card figcaption{padding:18px 20px 21px}.reel-card figcaption strong{font-size:22px}
 }
 @media(max-width:800px){
-  .hero-film-label{top:18px;left:18px;font-size:10px;padding:7px 11px;gap:10px}.hero-film-label>span:first-child{display:none}.hero-film-bars i{width:9px}.hero-film-bars i.is-current{width:20px}.faq-lawn{width:154px;height:62px;font-size:140px;margin-top:22px}
+  .hero-film-label{top:18px;left:18px;font-size:10px;padding:7px 11px;gap:10px}.hero-film-label>span:first-child{display:none}.hero-film-bars i{width:9px}.hero-film-bars i.is-current{width:20px}
   .hero-photo{height:300px}.hero-photo figcaption span:last-child{font-size:32px}.hero-photo figcaption span:first-child{font-size:11px;letter-spacing:.07em}.hero-photo figcaption{bottom:23px}
   .motion-ribbon{margin-top:26px}.ribbon-window{padding:16px 0 19px}.ribbon-track{animation-duration:36s}.motion-toolbar{gap:10px}.motion-toolbar>span{font-size:11px;max-width:200px}.motion-toggle{font-size:12px}
   .service-card{padding:12px 12px 24px}.service-visual{height:235px}.service-card h3,.service-card p,.service-card>a{margin-inline:14px}.service-card>a{width:calc(100% - 28px)}.service-card:nth-child(n){transition-delay:0s}.service-card:nth-child(n).is-pending{transform:translateY(75px) rotateX(12deg) rotate(-4deg)}
@@ -222,3 +222,16 @@ html:not(.motion-enabled) *,html:not(.motion-enabled) *:before,html:not(.motion-
 .reel-buttons button{transition:background .2s,color .2s,border-color .2s,transform .2s}
 .motion-paused .button:hover,.motion-paused .button:hover>span,.motion-paused .back-top:hover span,.motion-paused .reel-buttons button:hover{transform:none}
 @media(prefers-reduced-motion:reduce){.button:hover,.button:hover>span,.back-top:hover span,.reel-buttons button:hover{transform:none}}
+/* The FAQ illustration grows from, and folds back into, the sentence's period. */
+.faq-punctuation{position:relative;display:inline-block;width:1.15em;letter-spacing:0;isolation:isolate}
+.faq-period{display:inline-block;transform-origin:50% 83%;animation:faq-period-morph 7.6s cubic-bezier(.4,0,.2,1) infinite both}
+.faq-lawn{position:absolute;left:.035em;bottom:.14em;width:1.12em;height:.448em;margin:0;font-size:inherit;opacity:0;transform-origin:8% 83%;animation:faq-lawn-morph 7.6s cubic-bezier(.4,0,.2,1) infinite both;pointer-events:none}
+.faq-lawn>span{animation:none;opacity:1}
+.faq-lawn>.lawn-flower{animation:faq-flower-sway 7.6s ease-in-out infinite both}
+.faq-lawn>.lawn-mower{animation:faq-mower-roll 7.6s cubic-bezier(.25,.65,.3,1) infinite both}
+@keyframes faq-lawn-morph{0%,16%,92%,100%{opacity:0;transform:scale(.035)}24%{opacity:1;transform:scale(.25)}40%,68%{opacity:1;transform:scale(1)}84%{opacity:1;transform:scale(.16)}}
+@keyframes faq-period-morph{0%,16%,92%,100%{opacity:1;transform:scale(1)}27%,76%{opacity:0;transform:scale(.35)}84%{opacity:.35;transform:scale(.55)}}
+@keyframes faq-flower-sway{0%,36%,68%,100%{transform:none}46%{transform:rotate(-6deg)}56%{transform:rotate(4deg)}}
+@keyframes faq-mower-roll{0%,24%{opacity:0;transform:translateX(.16em)}40%,70%,100%{opacity:1;transform:none}}
+.motion-paused .faq-lawn{animation:none!important;opacity:0}
+.motion-paused .faq-period{animation:none!important;opacity:1;transform:none}@media(max-width:350px){#faq-heading{font-size:38px}}
