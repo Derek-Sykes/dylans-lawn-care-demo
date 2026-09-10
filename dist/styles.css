@@ -11,6 +11,16 @@
 .hero-detail,.section-heading>p,.service-card p,.contact-grid>div>p:not(.eyebrow),.contact-grid .contact-aside p:not(.eyebrow),.faq-list details p{font-size:1rem}
 .review-card figcaption,.service-card a,.facebook-contact{font-size:.875rem}
 .mobile-contact a span{font-size:.75rem}
-/* A small lawn illustration replaces the final full stop and scales with the type. */
+/* The final full stop grows into a small lawn scene, then comes to rest. */
+.hero-copy{padding-block:0}
 .headline-word{white-space:nowrap}
-.hero h1 .headline-lawn{display:inline-block;width:1.45em;height:.62em;margin-left:.025em;vertical-align:-.08em;background:currentColor;-webkit-mask:url('assets/headline-lawn.png') center / contain no-repeat;mask:url('assets/headline-lawn.png') center / contain no-repeat}
+.hero h1 .headline-lawn{position:relative;display:inline-block;width:1.1em;height:.44em;margin-left:.025em;vertical-align:-.075em;isolation:isolate}
+.headline-lawn>span{position:absolute;inset:0;background:url('assets/headline-lawn-color.png') center / 100% 100% no-repeat;-webkit-mask:url('assets/headline-lawn.png') center / 100% 100% no-repeat;mask:url('assets/headline-lawn.png') center / 100% 100% no-repeat;animation-duration:4.6s;animation-timing-function:cubic-bezier(.25,.65,.3,1);animation-fill-mode:both;pointer-events:none}
+.lawn-grass{clip-path:polygon(0 0,28% 0,28% 58%,34% 76%,34% 83%,36% 83%,36% 76%,44% 61%,44% 0,56.5% 0,56.5% 100%,0 100%);transform-origin:35% 83%;animation-name:lawn-unfurl}
+.lawn-flower{clip-path:polygon(28% 0,44% 0,44% 61%,36% 76%,36% 83%,34% 83%,34% 76%,28% 58%);transform-origin:35% 83%;animation-name:flower-grow}
+.lawn-mower{clip-path:inset(0 0 0 56.5%);transform-origin:76% 83%;animation-name:mower-arrive}
+.headline-lawn>.lawn-period{inset:auto auto .065em .02em;width:.11em;height:.11em;background:currentColor;border-radius:50%;-webkit-mask:none;mask:none;opacity:0;animation-name:period-bloom}
+@keyframes period-bloom{0%,14%{opacity:1;transform:translate(0,0) scale(1);background:var(--ink)}40%{opacity:1;transform:translate(.326em,-.145em) scale(.32);background:#b58521}50%,100%{opacity:0;transform:translate(.326em,-.145em) scale(.32);background:#b58521}}
+@keyframes lawn-unfurl{0%,16%{opacity:0;transform:scale(.08,.15)}35%{opacity:1}62%{transform:scale(1,1)}76%{transform:skewX(-2deg)}100%{opacity:1;transform:none}}
+@keyframes flower-grow{0%,20%{opacity:0;transform:scale(.08,.05)}32%{opacity:1}48%{transform:scale(1,1)}62%{transform:rotate(-4deg)}78%{transform:rotate(2deg)}100%{opacity:1;transform:none}}
+@keyframes mower-arrive{0%,42%{opacity:0;transform:translateX(.18em)}53%{opacity:1}68%{transform:translateX(.07em) rotate(-1.5deg)}87%{transform:translateX(0) rotate(.6deg)}100%{opacity:1;transform:none}}

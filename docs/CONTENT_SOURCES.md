@@ -24,7 +24,9 @@ Private demonstration use is authorized by the commissioning user. This is not e
 
 ## Decorative headline illustration
 
-`dist/assets/headline-lawn.png` is a generated grass, flower and push-mower ornament requested for the headline. It is decorative, not a business project photograph. The built-in image-generation tool produced the original transparent PNG; its alpha is displayed in the title's current text color. The four Facebook project photos remain unchanged. The generation prompt and original asset are retained outside this repository in the local client research folder.
+`dist/assets/headline-lawn.png` is a generated grass, flower and push-mower ornament requested for the headline. It is decorative, not a business project photograph. The built-in image-generation tool produced the original transparent PNG and the later `headline-lawn-color.png` edit with yellow petals and a red-and-black mower. The color edit contains an opaque checkerboard, so it is always displayed through the original PNG's genuine alpha mask; it must not be shown directly. Both assets share the same canvas and closely aligned silhouettes.
+
+CSS clips this artwork into flower, grass and mower layers for a single 4.6-second opening animation: a full stop rises into the flower, the lawn grows and the mower arrives. The completed scene stays still, and reduced-motion settings show it immediately. Its 1.1em width scales with the headline, and its decorative layers are hidden from assistive technology. The four Facebook project photos remain unchanged. Prompts, original assets and inspection records are retained outside this repository in the local client research folder.
 
 ## Contact behavior
 
