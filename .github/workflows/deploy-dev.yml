@@ -1,0 +1,128 @@
+name: Deploy dev to server
+run-name: Deploy dev ${{ github.sha }} by ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dylan-dev-server
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check requested dev revision
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Check the application
+        shell: pwsh
+        run: ./website.ps1 check -NoOpen
+      - name: Check deployment recovery
+        run: python3 scripts/test-dev-deploy.py
+
+  deploy:
+    name: Build and deploy isolated dev environment
+    needs: check
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    environment:
+      name: dev-server
+      url: https://dev-demo.xsolutionsmd.com
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Authenticate image publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build public website image
+        id: web
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/derek-sykes/dylans-lawn-care-dev-web:sha-${{ github.sha }}
+          build-args: REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=dylan-dev-web
+          cache-to: type=gha,mode=max,scope=dylan-dev-web
+      - name: Build booking image
+        id: booking
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./booking
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/derek-sykes/dylans-lawn-care-dev-booking:sha-${{ github.sha }}
+          build-args: REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=dylan-dev-booking
+          cache-to: type=gha,mode=max,scope=dylan-dev-booking
+      - name: Publish this manual deployment request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          BOOKING_DIGEST: ${{ steps.booking.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WEB_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$BOOKING_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n --arg revision "$GITHUB_SHA" --argjson runId "$GITHUB_RUN_ID" \
+            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg webImage "ghcr.io/derek-sykes/dylans-lawn-care-dev-web@$WEB_DIGEST" \
+            --arg bookingImage "ghcr.io/derek-sykes/dylans-lawn-care-dev-booking@$BOOKING_DIGEST" \
+            '{schema:1,environment:"dev",revision:$revision,runId:$runId,runAttempt:$runAttempt,webImage:$webImage,bookingImage:$bookingImage}' > deployment.json
+          request="dev-request-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          gh release create "$request" deployment.json --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "Manual dev request $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" \
+            --notes 'An explicitly requested dev deployment. This release cannot update the existing demo environment.'
+          if ! gh release view dev-server >/dev/null 2>&1; then
+            gh release create dev-server --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title 'Dev server deployment request' \
+              --notes 'Only the manual Deploy dev to server workflow updates this request. Ordinary pushes do not deploy dev.'
+          fi
+          gh release upload dev-server deployment.json --clobber
+      - name: Verify both images through the dev address
+        env:
+          EXPECTED: ${{ github.sha }}
+          ORACLE_HOST: ${{ vars.ORACLE_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$ORACLE_HOST"
+          for attempt in $(seq 1 75); do
+            web=$(curl -fsS --max-time 10 --resolve "dev-demo.xsolutionsmd.com:443:$ORACLE_HOST" \
+              "https://dev-demo.xsolutionsmd.com/version.json?run=$GITHUB_RUN_ID" | jq -r .revision) || web=''
+            receipt=$(curl -fsS --max-time 10 --resolve "dev-demo.xsolutionsmd.com:443:$ORACLE_HOST" \
+              "https://dev-demo.xsolutionsmd.com/admin/version.json?run=$GITHUB_RUN_ID") || receipt='{}'
+            booking=$(printf '%s' "$receipt" | jq -r .revision) || booking=''
+            run=$(printf '%s' "$receipt" | jq -r .deploymentRunId) || run=''
+            run_attempt=$(printf '%s' "$receipt" | jq -r .deploymentRunAttempt) || run_attempt=''
+            if [[ "$web" == "$EXPECTED" && "$booking" == "$EXPECTED" && "$run" == "$GITHUB_RUN_ID" && "$run_attempt" == "$GITHUB_RUN_ATTEMPT" ]]; then
+              curl -fsS --max-time 10 https://dev-demo.xsolutionsmd.com/ -D dev.headers -o dev.html
+              grep -Eiq '^x-robots-tag:.*noindex' dev.headers
+              curl -fsS --max-time 10 https://dev-demo.xsolutionsmd.com/admin/ -o admin.html
+              grep -q 'Owner portal' admin.html
+              echo "Deployed **$EXPECTED** to https://dev-demo.xsolutionsmd.com" >> "$GITHUB_STEP_SUMMARY"
+              echo 'Owner portal: https://dev-demo.xsolutionsmd.com/admin/' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'The isolated dev environment did not converge. Inspect dylan-dev-update.service on Oracle.' >&2
+          exit 1
+      - name: Clear temporary registry login
+        if: always()
+        run: docker logout ghcr.io

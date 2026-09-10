@@ -46,11 +46,13 @@ Google's registration status is independent of a website deployment. As checked 
 
 An app changed back to **Testing** accepts only registered test accounts and Calendar refresh grants normally expire after seven days. Production access and verification are managed by Google; do not describe a client as verified simply because its audience setting says Production. The completed validation record documents the actual real sign-in result for this release.
 
-## A future hosted installation
+## Hosted development and future installations
+
+The manually released dev environment uses a separate **X Solutions Booking Dev Server** web client in the same Google project, registered September 10, 2026. Its callback is `https://dev-demo.xsolutionsmd.com/oauth/callback`; its owner portal is `/admin/`. The private web client secret is stored only in that server's protected runtime configuration, separate from the desktop configuration repository. The dev volume keeps its own owner, tokens and calendar connection across manual deployments. See [manual deployment](DEV_DEPLOYMENT.md).
 
 A remotely hosted admin domain needs a separate **Web application** OAuth client with its exact HTTPS callback registered, for example `https://admin.example.com/oauth/callback`. Configure `GOOGLE_OAUTH_MODE=web`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` privately with the public and admin origins. A desktop loopback client cannot be reused as an arbitrary remote-domain callback.
 
-Use separate customer and admin routes at the reverse proxy. The public listener serves only public booking APIs; admin assets and authenticated APIs use the admin listener. Never publish the setup credential in a page or repository. The future Compose template is preparation, not an instruction to replace an existing live deployment.
+Use separate customer and admin routes at the reverse proxy. The public listener serves only public booking APIs; admin assets and authenticated APIs use the admin listener. For a shared HTTPS hostname, set `ADMIN_BASE_PATH=/admin` and route the owner paths accordingly. Separate origins and the desktop loopback behavior remain supported. Never publish the setup credential in a page or repository. The future production Compose template is preparation, not an instruction to replace an existing live deployment.
 
 ## References
 

@@ -119,7 +119,7 @@ func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !constantEqual(a.store.hash(in.Token), a.store.hash(a.cfg.BootstrapToken)) {
-		writeError(w, &apiError{401, "invalid_bootstrap", "Open the admin link from this installation's launcher."})
+		writeError(w, &apiError{401, "invalid_bootstrap", "Open this installation's private setup link."})
 		return
 	}
 	s, err := a.newSession(w)
@@ -149,7 +149,7 @@ func (a *App) handleConnect(w http.ResponseWriter, r *http.Request) {
 	_, sessionID, sessionErr := a.session(r)
 	owner, ownerErr := a.google.owner()
 	if sessionErr != nil && (ownerErr != nil || owner.Sub == "") {
-		writeError(w, &apiError{401, "setup_required", "Open the setup link from this installation's launcher first."})
+		writeError(w, &apiError{401, "setup_required", "Open this installation's private setup link first."})
 		return
 	}
 	state, verifier, binding := randomToken(32), randomToken(48), randomToken(32)
@@ -193,7 +193,7 @@ func (a *App) handleCallback(w http.ResponseWriter, r *http.Request) {
 	outcome := "failed"
 	defer func() {
 		http.SetCookie(w, &http.Cookie{Name: a.oauthCookieName(), Path: "/oauth/callback", HttpOnly: true, Secure: a.secureAdmin, SameSite: http.SameSiteLaxMode, MaxAge: -1})
-		http.Redirect(w, r, a.cfg.AdminOrigin+"/?google="+outcome, http.StatusSeeOther)
+		http.Redirect(w, r, a.cfg.adminHomeURL()+"?google="+outcome, http.StatusSeeOther)
 	}()
 	cookie, err := r.Cookie(a.oauthCookieName())
 	if err != nil {

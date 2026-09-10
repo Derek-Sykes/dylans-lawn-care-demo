@@ -13,5 +13,7 @@ artifacts/
 test-results/
 playwright-report/
 *.log
+__pycache__/
+*.pyc
 Thumbs.db
 .DS_Store

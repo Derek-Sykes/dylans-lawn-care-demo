@@ -9,9 +9,14 @@ FROM build AS test
 RUN --mount=type=cache,target=/root/.cache/go-build go test -race -count=1 ./...
 
 FROM build AS compile
-RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /booking .
+ARG REVISION=local
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=1 go build -trimpath -ldflags="-s -w -X main.revision=${REVISION}" -o /booking .
 
 FROM alpine:3.24 AS runtime
+ARG REVISION=local
+LABEL org.opencontainers.image.title="Dylan's Lawn Care booking service"
+LABEL org.opencontainers.image.source="https://github.com/Derek-Sykes/dylans-lawn-care-demo"
+LABEL org.opencontainers.image.revision=$REVISION
 RUN apk add --no-cache ca-certificates tzdata wget && addgroup -g 10001 booking && adduser -D -u 10001 -G booking booking && mkdir /data && chown booking:booking /data
 COPY --from=compile /booking /usr/local/bin/booking
 USER booking

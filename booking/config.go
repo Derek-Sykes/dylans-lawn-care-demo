@@ -11,21 +11,24 @@ import (
 )
 
 type Config struct {
-	PublicOrigin, AdminOrigin, DataDir, BootstrapToken, WebDir string
-	ClientID, ClientSecret, OAuthMode                          string
-	AuthURL, TokenURL, UserInfoURL, CalendarURL, RevokeURL     string
-	HTTPTimeout                                                time.Duration
+	PublicOrigin, AdminOrigin, AdminBasePath, DataDir, BootstrapToken, WebDir string
+	DeploymentRunID, DeploymentRunAttempt                                     string
+	ClientID, ClientSecret, OAuthMode                                         string
+	AuthURL, TokenURL, UserInfoURL, CalendarURL, RevokeURL                    string
+	HTTPTimeout                                                               time.Duration
 }
 
 func loadConfig() (Config, error) {
-	c := Config{PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), AdminOrigin: os.Getenv("ADMIN_ORIGIN"), DataDir: os.Getenv("DATA_DIR"), BootstrapToken: os.Getenv("BOOTSTRAP_TOKEN"), WebDir: os.Getenv("WEB_DIR"), ClientID: os.Getenv("GOOGLE_CLIENT_ID"), ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"), OAuthMode: os.Getenv("GOOGLE_OAUTH_MODE"), HTTPTimeout: 15 * time.Second}
+	c := Config{PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), AdminOrigin: os.Getenv("ADMIN_ORIGIN"), AdminBasePath: os.Getenv("ADMIN_BASE_PATH"), DataDir: os.Getenv("DATA_DIR"), BootstrapToken: os.Getenv("BOOTSTRAP_TOKEN"), WebDir: os.Getenv("WEB_DIR"), ClientID: os.Getenv("GOOGLE_CLIENT_ID"), ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"), OAuthMode: os.Getenv("GOOGLE_OAUTH_MODE"), HTTPTimeout: 15 * time.Second}
+	c.DeploymentRunID = os.Getenv("DEPLOYMENT_RUN_ID")
+	c.DeploymentRunAttempt = os.Getenv("DEPLOYMENT_RUN_ATTEMPT")
 	if c.DataDir == "" {
 		c.DataDir = "/data"
 	}
 	if c.OAuthMode == "" {
 		c.OAuthMode = "desktop"
 	}
-	if c.ClientID == "" {
+	if c.ClientID == "" && c.OAuthMode == "desktop" {
 		// Desktop client identifiers are public configuration, never server credentials.
 		var file struct {
 			ClientID  string `json:"client_id"`
@@ -65,6 +68,11 @@ func parseOrigin(raw string) (*url.URL, error) {
 func loopbackHost(host string) bool { ip := net.ParseIP(host); return ip != nil && ip.IsLoopback() }
 
 func validateConfig(c Config) error {
+	for _, value := range []string{c.DeploymentRunID, c.DeploymentRunAttempt} {
+		if len(value) > 20 || strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			return errors.New("deployment identifiers must be numeric and at most 20 digits")
+		}
+	}
 	if _, err := parseOrigin(c.PublicOrigin); err != nil {
 		return err
 	}
@@ -72,8 +80,14 @@ func validateConfig(c Config) error {
 	if err != nil {
 		return err
 	}
-	if c.PublicOrigin == c.AdminOrigin {
-		return errors.New("public and admin origins must be separate")
+	if c.AdminBasePath != "" && c.AdminBasePath != "/admin" {
+		return errors.New("ADMIN_BASE_PATH must be empty or /admin")
+	}
+	if c.AdminBasePath != "" && (c.OAuthMode != "web" || admin.Scheme != "https") {
+		return errors.New("an admin base path requires HTTPS web OAuth")
+	}
+	if c.PublicOrigin == c.AdminOrigin && c.AdminBasePath != "/admin" {
+		return errors.New("a shared public and admin origin requires ADMIN_BASE_PATH=/admin")
 	}
 	if len(c.BootstrapToken) < 32 {
 		return errors.New("BOOTSTRAP_TOKEN must contain at least 32 random characters")
@@ -89,3 +103,5 @@ func validateConfig(c Config) error {
 	}
 	return nil
 }
+
+func (c Config) adminHomeURL() string { return c.AdminOrigin + c.AdminBasePath + "/" }

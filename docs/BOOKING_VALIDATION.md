@@ -1,6 +1,15 @@
-# Local booking validation
+# Booking validation
 
-Validation date: September 10, 2026. These checks concern the local booking extension on `dev`, not a server deployment.
+Validation date: September 10, 2026. The original sections below concern the local booking extension on `dev`. The separate manual-server verification is recorded at the end; it does not replace or deploy the existing demo/main environment.
+
+## Manual dev deployment implementation checks
+
+- Full PowerShell application check passed after adding shared-host `/admin/` support: static content/revision/private-file checks, Go race suite and isolated authentication/CSRF/settings integration.
+- Twenty deployment fault and state tests passed in Linux containers as root and as an unprivileged user, including Python optimized mode. They cover manual-only manifest processing, stale/equal requests, exact image identity, repeated attempts, first-install cleanup, failed replacements, failed HTTPS, malformed Compose recovery, stopped snapshots, encryption-key preservation, partial/orphaned state refusal and a persistent interrupted-transaction guard.
+- Real disposable Docker candidates passed web/admin health, exact revision, noindex and public API checks. A real volume snapshot/restore preserved the synthetic database, encryption key and ownership and removed files from the replaced generation. No real Google configuration or existing volumes were used.
+- `scripts/test-dev-proxy.py` exercised the canonical dev Caddy route through isolated containers and trusted temporary HTTPS certificates: public root, `/admin/`, redirect, CSS/JS, both version endpoints and workflow receipt, owner authentication, CSRF, correct Google callback URL and rejection of owner requests on the public backend listener. It made no external OAuth request and removed its temporary containers/network.
+- The server installer passed Bash syntax validation. Hosted Google web-client registration uses the exact dev callback; credentials are in ignored protected operator storage, outside both image allowlists and source publication.
+- Live deployment results are added after the manual workflow and server installation are verified. These local tests do not claim a server reboot or real power-loss test.
 
 ## Verified behavior
 

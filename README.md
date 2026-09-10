@@ -1,6 +1,6 @@
 # Dylan's Lawn Care — website and local booking workspace
 
-The public website lives in `dist/`. Local development also runs a Go booking service, a private admin workspace and a persistent SQLite database. **This booking work is development only.** The currently deployed [public demonstration](https://demo.xsolutionsmd.com) and its main-only static release workflow remain separate; these changes do not deploy booking.
+The public website lives in `dist/`. Local development also runs a Go booking service, a private admin workspace and a persistent SQLite database. **This booking work is development only.** The [existing demonstration](https://demo.xsolutionsmd.com) uses the separate main-only static release workflow. The complete dev application has its own [manual server deployment](docs/DEV_DEPLOYMENT.md) at **https://dev-demo.xsolutionsmd.com**, with the owner portal at **/admin/**. Ordinary dev pushes run checks and do not deploy either environment.
 
 ## Start on this computer
 
@@ -74,6 +74,8 @@ Developer launcher regression tests are in [scripts/test-launchers.ps1](scripts/
 
 [scripts/test-google-setup.ps1](scripts/test-google-setup.ps1) exercises private setup with synthetic credentials in each available shell: PowerShell 7, Windows PowerShell 5.1 and Bash. It checks missing, malformed, oversized and mismatched configuration, unexpected Git URL rewrites, successful import, temporary-file cleanup and offline reuse. It does not read real Google credentials.
 
-The root Dockerfile, active `compose.production.yaml`, `server/` scripts and main release behavior remain the static website deployment. The existing GitHub workflow can still use PowerShell `check` on Linux, then publish only the root static image after a separately authorized main merge. **No booking backend, data or credentials are published by that workflow.** See [existing deployment records](docs/DEPLOYMENT.md).
+The root Dockerfile, `compose.production.yaml`, existing `server/update-release.sh` and main release behavior remain the static website deployment. The existing GitHub workflow uses PowerShell `check` on Linux, then publishes only the root static image after a separately authorized main merge. **No booking backend, data or credentials are published by that main workflow.** See [existing deployment records](docs/DEPLOYMENT.md).
 
-[compose.booking.production.yaml](compose.booking.production.yaml) is a future template only. It is never selected by the launchers or release workflow. A real booking deployment needs a separately authorized reviewed release, approved public/admin HTTPS origins, appropriate Google configuration, backup/restore verification and shared-proxy routing. No final client launch or owner acceptance is established by this local implementation.
+[compose.dev-server.yaml](compose.dev-server.yaml) and [server/dev](server/dev) belong exclusively to the manual dev environment. Use GitHub Actions → **Deploy dev to server** → **Run workflow**, select **dev**, then confirm **Run workflow**. This builds the chosen dev revision on GitHub and updates only that environment, preserving its private settings and data. See [deployment and recovery instructions](docs/DEV_DEPLOYMENT.md).
+
+[compose.booking.production.yaml](compose.booking.production.yaml) remains a future template for a separately authorized booking launch. It is never selected by the local launchers or either release workflow. No final client launch or owner acceptance is established by the dev deployment.

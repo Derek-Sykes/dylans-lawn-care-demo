@@ -110,7 +110,7 @@
     $('#portal').hidden = true; $('#logout').hidden = true; $('#loading-view').hidden = true; $('#signin-view').hidden = false;
     const signInAvailable = Boolean(state.session?.google?.configured && !state.session?.setupRequired);
     $('#signin-google').hidden = !signInAvailable;
-    $('#signin-copy').textContent = signInAvailable ? 'Sign in with the Google account already connected to this portal.' : 'Open the owner portal from your local website launcher to sign in securely. Your access stays private to this installation.';
+    $('#signin-copy').textContent = signInAvailable ? 'Sign in with the Google account already connected to this portal.' : 'Open this installation\'s private setup link to sign in securely. Your access stays private to this installation.';
   }
   function switchPanel(panel, focus = false) {
     state.activePanel = panel;

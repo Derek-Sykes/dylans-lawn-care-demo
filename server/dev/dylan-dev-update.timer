@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a manually published Dylan development manifest
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=dylan-dev-update.service
+
+[Install]
+WantedBy=timers.target

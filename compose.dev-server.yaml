@@ -1,0 +1,65 @@
+# Used only by the independently installed, manually released dev environment.
+name: dylan-dev
+services:
+  web:
+    image: ${DYLAN_DEV_WEB_IMAGE:?Set the approved dev web image digest}
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+    depends_on:
+      booking:
+        condition: service_healthy
+    networks:
+      private:
+      proxy:
+        aliases: [dylan-dev-web]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp, /data, /config]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # The packaged Caddy binary carries this file capability even on port 8080.
+    cap_add: [NET_BIND_SERVICE]
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "2"
+  booking:
+    image: ${DYLAN_DEV_BOOKING_IMAGE:?Set the approved dev booking image digest}
+    env_file: ./runtime.env
+    environment:
+      DATA_DIR: /data
+      PUBLIC_ORIGIN: https://dev-demo.xsolutionsmd.com
+      ADMIN_ORIGIN: https://dev-demo.xsolutionsmd.com
+      ADMIN_BASE_PATH: /admin
+      GOOGLE_OAUTH_MODE: web
+      DEPLOYMENT_RUN_ID: ${DYLAN_DEV_RUN_ID:?Set the manually dispatched run ID}
+      DEPLOYMENT_RUN_ATTEMPT: ${DYLAN_DEV_RUN_ATTEMPT:?Set the manually dispatched run attempt}
+    volumes:
+      - booking-data:/data
+    networks:
+      private:
+      proxy:
+        aliases: [dylan-dev-admin]
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1:8081/healthz && wget -q -O /dev/null http://127.0.0.1:8082/healthz"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 15
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "2"
+volumes:
+  booking-data:
+    name: dylan-dev_booking-data
+networks:
+  private:
+  proxy:
+    external: true
+    name: xsolutions-proxy

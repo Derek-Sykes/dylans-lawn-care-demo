@@ -20,6 +20,13 @@ import (
 //go:embed web/index.html web/admin.css web/admin.js config/google-client.json
 var embedded embed.FS
 
+// Set from the same source revision as the container's OCI label at build time.
+var revision = "local"
+
+func (a *App) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"revision": revision, "deploymentRunId": a.cfg.DeploymentRunID, "deploymentRunAttempt": a.cfg.DeploymentRunAttempt})
+}
+
 type App struct {
 	cfg                   Config
 	store                 *Store
@@ -186,6 +193,7 @@ func (a *App) middleware(next http.Handler, admin bool) http.Handler {
 
 func (a *App) publicHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /version.json", a.handleVersion)
 	mux.HandleFunc("GET /api/public/config", func(w http.ResponseWriter, r *http.Request) {
 		v, err := a.store.settings()
 		if err != nil {
@@ -229,6 +237,7 @@ func (a *App) publicHandler() http.Handler {
 }
 func (a *App) adminHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /version.json", a.handleVersion)
 	mux.HandleFunc("GET /api/admin/session", a.handleSession)
 	mux.HandleFunc("POST /api/admin/bootstrap", a.handleBootstrap)
 	mux.HandleFunc("POST /api/admin/logout", a.handleLogout)
@@ -341,8 +350,21 @@ func (a *App) adminHandler() http.Handler {
 			writeError(w, &apiError{405, "method_not_allowed", "This page is read-only."})
 			return
 		}
-		switch r.URL.Path {
-		case "/", "/index.html", "/admin.css", "/admin.js":
+		adminHome := a.cfg.AdminBasePath + "/"
+		switch {
+		case a.cfg.AdminBasePath != "" && (r.URL.Path == a.cfg.AdminBasePath || r.URL.Path == adminHome+"index.html"):
+			// A canonical trailing slash keeps relative navigation in the portal.
+			location := adminHome
+			if r.URL.RawQuery != "" {
+				location += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, location, http.StatusPermanentRedirect)
+		case r.URL.Path == adminHome:
+			page := r.Clone(r.Context())
+			page.URL.Path = "/"
+			page.URL.RawPath = ""
+			assets.ServeHTTP(w, page)
+		case r.URL.Path == "/admin.css" || r.URL.Path == "/admin.js" || (a.cfg.AdminBasePath == "" && r.URL.Path == "/index.html"):
 			assets.ServeHTTP(w, r)
 		default:
 			writeError(w, &apiError{404, "not_found", "Page not found."})

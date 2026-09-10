@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply an explicitly requested Dylan development release
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dylan-dev-update
+TimeoutStartSec=12min
+TimeoutStopSec=6min
+UMask=0077
