@@ -20,6 +20,9 @@ const motionToggle = document.querySelector('.motion-toggle');
 document.querySelectorAll('.section-heading>div:first-child,.faq>div:first-child').forEach(element => element.classList.add('reveal', 'reveal-from-left'));
 document.querySelectorAll('.section-heading>p,.review-summary,.faq-list').forEach(element => element.classList.add('reveal', 'reveal-from-right'));
 const reveals = document.querySelectorAll('.reveal');
+const scrollReveals = [...reveals].map(element => ({ element, trigger: element }));
+scrollReveals.push({ element: document.querySelector('.hero-scenes'), trigger: document.querySelector('.hero-photo') });
+let revealFrame = 0;
 let userPausedMotion = false;
 const motionIsPaused = () => userPausedMotion || motionPreference.matches;
 const heroScenes = [...document.querySelectorAll('.hero-scene')];
@@ -172,12 +175,60 @@ if ('IntersectionObserver' in window) {
 document.addEventListener('visibilitychange', updateRotation);
 document.addEventListener('visibilitychange', updateHeroRotation);
 
+// Layout offsets stay stable while an entrance translates, rotates or clips its element.
+function layoutTop(element) {
+  let top = 0;
+  for (let node = element; node; node = node.offsetParent) {
+    top += node.offsetTop;
+    if (node.offsetParent) top += node.offsetParent.clientTop;
+  }
+  return top;
+}
+
+function updateScrollReveals() {
+  cancelAnimationFrame(revealFrame);
+  revealFrame = 0;
+  if (motionIsPaused()) {
+    scrollReveals.forEach(({ element }) => element.classList.remove('is-pending'));
+    return;
+  }
+  const viewportTop = window.scrollY + document.querySelector('.header').offsetHeight;
+  const viewportBottom = window.scrollY + window.innerHeight - document.querySelector('.mobile-contact').offsetHeight;
+  const viewportHeight = Math.max(0, viewportBottom - viewportTop);
+  // Read all layout bounds before changing classes to avoid repeated layout work.
+  const positions = scrollReveals.map(({ element, trigger }) => {
+    const top = layoutTop(trigger);
+    const height = trigger.offsetHeight;
+    return { element, top, bottom: top + height, height };
+  });
+  positions.forEach(({ element, top, bottom, height }) => {
+    const visible = Math.min(bottom, viewportBottom) - Math.max(top, viewportTop);
+    const entryDistance = Math.min(height * .1, viewportHeight * .1);
+    if (element.contains(document.activeElement) || visible >= entryDistance) {
+      element.classList.remove('is-pending');
+    } else if (bottom <= viewportTop || top >= viewportBottom) {
+      // Rearm only after a full exit, in either scroll direction.
+      element.classList.add('is-pending');
+    }
+  });
+}
+
+function scheduleScrollReveals() {
+  if (!revealFrame && !motionIsPaused()) revealFrame = requestAnimationFrame(updateScrollReveals);
+}
+window.addEventListener('scroll', scheduleScrollReveals, { passive: true });
+window.addEventListener('resize', scheduleScrollReveals);
+window.addEventListener('load', scheduleScrollReveals);
+document.addEventListener('focusin', scheduleScrollReveals);
+document.querySelectorAll('.faq-list details').forEach(details => details.addEventListener('toggle', scheduleScrollReveals));
+document.fonts?.ready.then(scheduleScrollReveals);
+
 function updatePageMotion() {
   document.body.classList.toggle('motion-paused', motionIsPaused());
   motionToggle.querySelector('.motion-label').textContent = motionPreference.matches ? 'Motion off' : userPausedMotion ? 'Play motion' : 'Pause motion';
   motionToggle.querySelector('.motion-icon').textContent = motionIsPaused() ? '▷' : 'Ⅱ';
   motionToggle.disabled = motionPreference.matches;
-  if (motionIsPaused()) reveals.forEach(element => element.classList.remove('is-pending'));
+  updateScrollReveals();
   updateRotation();
   updateHeroRotation();
 }
@@ -186,20 +237,4 @@ motionToggle.addEventListener('click', () => { userPausedMotion = !userPausedMot
 motionPreference.addEventListener('change', updatePageMotion);
 updatePageMotion();
 
-// Stage the cards once as they enter; all content stays readable without motion.
-if (!motionIsPaused() && 'IntersectionObserver' in window) {
-  const revealObserver = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if (!entry.isIntersecting) return;
-      entry.target.classList.remove('is-pending');
-      revealObserver.unobserve(entry.target);
-    });
-  }, { threshold: .1 });
-  reveals.forEach(element => {
-    if (element.getBoundingClientRect().top >= window.innerHeight) {
-      element.classList.add('is-pending');
-      revealObserver.observe(element);
-    }
-  });
-}
 document.documentElement.classList.add('motion-enabled');
