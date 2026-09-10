@@ -22,7 +22,7 @@ demo.xsolutionsmd.com {
 
 DNS for `demo.xsolutionsmd.com` points to Oracle. The proxy owns public ports 80/443 and TLS; the demo container publishes no host ports. Its internal HTTP server has no certificate volume. The company website is a separate service with a different network alias and independent release workflow. The shared wildcard DNS record is intended to cover future demo subdomains. Each additional website still needs an explicit gateway route and a unique container alias; existing explicit DNS records take precedence over the wildcard.
 
-Configure Actions variable `ORACLE_HOST` to the Oracle public IP, set the GHCR package to public, protect `main` with pull requests and **Check website container**, and restrict the `production` environment to `main`. These GitHub settings must be verified independently of files in this repository.
+Configure Actions variable `ORACLE_HOST` to the Oracle public IP, set the GHCR package to public, protect `main` with pull requests and **Check website container**, and restrict the `production` environment to `main`. These GitHub settings must be verified independently of files in this repository. Also check the Actions page: if it shows Enable Actions on this repository, enable that gate. This repository previously allowed manual checks while automatic push/PR runs were disabled; the API enabled flag alone did not reveal the gate.
 
 From a reviewed checkout on the prepared server, install with:
 
