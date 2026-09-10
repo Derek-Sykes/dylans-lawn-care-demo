@@ -33,9 +33,9 @@ The website is static: there are no accounts, database, uploaded leads, stored m
 
 ## Git and a second computer
 
-Develop on `dev` or a focused feature branch targeting `dev`. Review and commit changes, then push to the dedicated private client repository when configured. On a second computer, clone its **dev** branch, start Docker Desktop and run `start.bat`. Use `update.bat` thereafter.
+Develop on `dev` or a focused feature branch targeting `dev`. Review and commit changes, then push to this repository. On a second computer, clone its **dev** branch, start Docker Desktop and run `start.bat`. Use `update.bat` thereafter.
 
-The private repository is [Derek-Sykes/dylans-lawn-care-demo](https://github.com/Derek-Sykes/dylans-lawn-care-demo), with `dev` as its default branch. Authenticate GitHub on the second computer, then clone once:
+The public repository is [Derek-Sykes/dylans-lawn-care-demo](https://github.com/Derek-Sykes/dylans-lawn-care-demo), with `dev` as its default branch. Cloning does not require a GitHub sign-in; pushing changes requires write access. Clone once:
 
 ```powershell
 git clone --branch dev https://github.com/Derek-Sykes/dylans-lawn-care-demo.git
@@ -47,7 +47,7 @@ The GitHub **Check website container** workflow also has a **Run workflow** butt
 
 The updater follows the current `dev` or `main` branch. It refuses uncommitted/untracked work, feature branches, and history that cannot safely advance to the remote. It fetches and fast-forwards, builds and verifies a candidate, then replaces this local container. A failed build leaves the prior packaged container running; source may already have advanced. It never force-resets Git or removes unrelated Docker resources. In dev mode, edits are visible immediately because its source is mounted.
 
-The included GitHub check builds the container, verifies the exact files and source revision, tests health and demo indexing headers, and checks private files are inaccessible. It has read-only repository permission. **There is no publish or deploy job, including on main.** On September 10, the user authorized the final presentation version to be pushed to `dev` and merged into `main`, while explicitly deferring server setup and deployment automation. Future changes still develop on `dev`; later main merges and actual server publication require their own authorization. Repository protection settings must be configured/verified separately; files alone do not enforce them.
+The included GitHub check builds the container, verifies the exact files and source revision, tests health and demo indexing headers, and checks private files are inaccessible. It has read-only repository permission. **There is no publish or deploy job, including on main.** The September 10 final presentation is saved on both `dev` and `main`. Continue development on `dev` and review changes before promoting them to `main`. Server setup and deployment automation are deferred; making the source public does not host the website. Repository protection settings must be configured/verified separately; files alone do not enforce them.
 
 `/version.json` reports the packaged commit, with `-dirty` for a checkout containing uncommitted changes. In dev mode, this identifies the base build; live mounted edits can be newer. Read the parent client's QA record for the actual tested revision and visual checks.
 
