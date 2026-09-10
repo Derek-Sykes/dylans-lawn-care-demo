@@ -11,3 +11,6 @@
 .hero-detail,.section-heading>p,.service-card p,.contact-grid>div>p:not(.eyebrow),.contact-grid .contact-aside p:not(.eyebrow),.faq-list details p{font-size:1rem}
 .review-card figcaption,.service-card a,.facebook-contact{font-size:.875rem}
 .mobile-contact a span{font-size:.75rem}
+/* A small lawn illustration replaces the final full stop and scales with the type. */
+.headline-word{white-space:nowrap}
+.hero h1 .headline-lawn{display:inline-block;width:1.45em;height:.62em;margin-left:.025em;vertical-align:-.08em;background:currentColor;-webkit-mask:url('assets/headline-lawn.png') center / contain no-repeat;mask:url('assets/headline-lawn.png') center / contain no-repeat}

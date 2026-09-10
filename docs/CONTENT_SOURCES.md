@@ -22,6 +22,10 @@ The local JPEGs are unaltered copies of the Facebook-displayed work photos, crop
 
 Private demonstration use is authorized by the commissioning user. This is not evidence of permission from the business or rights holders for public publication. Obtain owner approval of selected copy, images and testimonials before an actual launch. Exact source exports remain outside this repository. No competitor text, logos or photographs were copied.
 
+## Decorative headline illustration
+
+`dist/assets/headline-lawn.png` is a generated grass, flower and push-mower ornament requested for the headline. It is decorative, not a business project photograph. The built-in image-generation tool produced the original transparent PNG; its alpha is displayed in the title's current text color. The four Facebook project photos remain unchanged. The generation prompt and original asset are retained outside this repository in the local client research folder.
+
 ## Contact behavior
 
 Phone actions use `tel:+14103651265`. Facebook links open the verified business profile, whose Message control was visible. The page explains that Facebook may require sign-in. No phone call, message, form receipt or booked service has been tested or claimed. The site has no submission backend and collects no visitor data.
