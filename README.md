@@ -1,76 +1,75 @@
-# Dylan's Lawn Care — website demo
+# Dylan's Lawn Care — website and local booking workspace
 
-A standalone static website with a local Docker preview and an authorized demonstration address at **https://demo.xsolutionsmd.com**. Public website files live in `dist/`. Develop on `dev`; an authorized merge into `main` checks, publishes and deploys the demo to Oracle. The company website keeps its own container at xsolutionsmd.com. This repository contains no server credentials, domain automation or quote submission backend.
+The public website lives in `dist/`. Local development also runs a Go booking service, a private admin workspace and a persistent SQLite database. **This booking work is development only.** The currently deployed [public demonstration](https://demo.xsolutionsmd.com) and its main-only static release workflow remain separate; these changes do not deploy booking.
 
-## Start the demo
+## Start on this computer
 
-Install Git and Docker Desktop with Linux containers. Start Docker Desktop, then double-click **start.bat** in this folder. It builds the image, verifies the files, starts the website and opens:
+Install and start Docker Desktop with Linux containers. No Go, Python, Node, database or Google secret is required to start.
 
-**http://127.0.0.1:4177/**
+Windows PowerShell:
 
-The preview listens only on this computer. Keep Docker Desktop running while recording. Closing the launcher window does not stop the website. Double-click **stop.bat** when finished.
+~~~powershell
+.\website.ps1 start
+~~~
 
-| Task | Double-click on Windows | PowerShell from this folder |
+If Windows blocks local scripts, use this single-command, process-only override; it does not change the system execution policy:
+
+~~~powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\website.ps1 start
+~~~
+
+macOS, Linux or Git Bash:
+
+~~~bash
+./website start
+~~~
+
+Windows users can also double-click **start.bat**. The command builds and verifies both images, starts the app, prints the public and admin addresses, and opens the admin workspace with the private setup credential in a URL fragment. The admin page consumes and removes that fragment. The credential is never printed by the launcher.
+
+Preferred addresses are **http://127.0.0.1:4177/** for customers and **http://127.0.0.1:4178/** for the admin workspace. If either port is occupied, the launcher chooses an available port and remembers it. Each fresh clone receives its own install ID, Docker project and database volume, so two copies can run together. Both addresses bind only to this computer.
+
+The admin workspace can be opened and configured before connecting Google. The first Google connection requires a one-time import of the private Google client JSON in the authenticated admin workspace, then normal Google sign-in. That private file is provided separately and never belongs in GitHub; its imported configuration is encrypted in this install's persistent data volume. Real availability and confirmations require a successful Calendar connection. See [Google setup and limitations](docs/GOOGLE_OAUTH.md). The included public desktop client ID is not a secret; optional overrides belong in the environment or ignored `.env`.
+
+The owner sets regular working days and hours, date exceptions, and optional time off for recurring breaks or specific dates. Available appointments are working hours minus time off, existing reservations and Google Calendar conflicts. Saved requests include contact and property details, private follow-up notes, and separate customer-follow-up and Calendar-sync statuses. See [validation results](docs/BOOKING_VALIDATION.md).
+
+| Task | PowerShell | Bash |
 |---|---|---|
-| Build, check and show the demo | `start.bat` | `.\website.ps1 start` |
-| Edit and refresh immediately | `dev.bat` | `.\website.ps1 dev` |
-| Build and verify without starting | `build.bat` | `.\website.ps1 build -NoOpen` |
-| Pull the current branch, rebuild and start | `update.bat` | `.\website.ps1 update` |
-| Stop this demo | `stop.bat` | `.\website.ps1 stop` |
-| Run container/file checks | `check.bat` | `.\website.ps1 check -NoOpen` |
-| See current status | `status.bat` | `.\website.ps1 status` |
-| See recent logs | — | `.\website.ps1 logs` |
+| Build, verify and start | `.\website.ps1 start` | `./website start` |
+| Edit public/admin files and refresh | `.\website.ps1 dev` | `./website dev` |
+| Build and verify the static package | `.\website.ps1 build -NoOpen` | `./website build --no-open` |
+| Run backend and application checks | `.\website.ps1 check -NoOpen` | `./website check --no-open` |
+| Safely update, rebuild and start | `.\website.ps1 update` | `./website update` |
+| Stop this install, keep its data | `.\website.ps1 stop` | `./website stop` |
+| Status and both addresses | `.\website.ps1 status` | `./website status` |
+| Recent app logs | `.\website.ps1 logs` | `./website logs` |
+| Reopen private admin setup | `.\website.ps1 open` | `./website open` |
 
-The batch files apply a PowerShell execution-policy override only to their own invocation; they do not change Windows policy. Append `-NoOpen` when using PowerShell to avoid opening the browser. If port 4177 is occupied, copy `.env.example` to `.env`, choose a different `DYLAN_PORT`, and restart. Leave unrelated applications running. A second simultaneous clone also needs a distinct `DYLAN_PROJECT`.
+Append `-NoOpen` in PowerShell or `--no-open` in Bash to suppress browser opening. The existing Windows batch shortcuts remain supported. Keep Docker running while using the app. Closing a launcher window does not stop the app.
 
-## Make changes
+## Editing and updates
 
-Use **dev.bat**, edit HTML/CSS/JavaScript/photos in `dist/`, and refresh the browser. The container mounts those actual files read-only, matching VoiceVault's source-mounted development pattern. No bundler or package installation is needed. Restart dev mode after changing Caddy or Docker configuration.
+In dev mode, public `dist/` and admin `booking/web/` are mounted read-only from the checkout, so HTML/CSS/JavaScript edits appear on refresh. Rerun dev after Go or container configuration changes. Start and update use packaged images, removing those source mounts; later edits require another build/start.
 
-Use **start.bat** before recording or acceptance review. It packages the files into the image, checks every served file against the checkout, and starts that exact image without a source mount. Later file edits require another start/build. The image contains only `dist/` and the web-server configuration; Git history, client research, launchers and private notes are excluded.
+Git is needed only to clone and update. The updater accepts a clean current `dev` or `main` branch and performs a fast-forward only. It refuses uncommitted/untracked source changes, feature branches, and ahead/divergent history. It never resets your work, overwrites private setup, or deletes a database volume. A failed build leaves the previous containers running, although the source may already have advanced. Development normally belongs on `dev`.
 
-The website is static: there are no accounts, database, uploaded leads, stored messages or tool-login volumes to preserve. Contact links open the business's verified contact destinations. They do not establish message delivery or a booked appointment. Keep personal notes and asset approval records in the parent client folder, outside this repository and image.
+The saved `.local/runtime.env` contains this install's ID, project name, selected ports and bootstrap token. It is ignored by Git. `.env` can optionally override the preferred ports, project name and Google settings; see [the example](.env.example). Avoid changing an existing install's project name because it selects a different database volume. Copying the source without `.local/` creates a separate install; restoring an install requires its saved state and data together.
 
-## Git and a second computer
+`stop` removes only this install's containers and network. Its named `<project>_booking-data` volume survives stop, rebuild, source update and Docker restart. A stopped stack resumes on its saved ports when those ports remain available. If another program claims one, the next start selects another; OAuth uses the resulting loopback admin origin.
 
-Develop on `dev` or a focused feature branch targeting `dev`. Review and commit changes, then push to this repository. On a second computer, clone its **dev** branch, start Docker Desktop and run `start.bat`. Use `update.bat` thereafter.
+PowerShell and Bash share an atomic launcher guard. If a launcher is terminated without cleanup, confirm it is no longer running before removing `.local/launcher.guard` and retrying.
 
-The public repository is [Derek-Sykes/dylans-lawn-care-demo](https://github.com/Derek-Sykes/dylans-lawn-care-demo), with `dev` as its default branch. Cloning does not require a GitHub sign-in; pushing changes requires write access. Clone once:
+## Privacy and backups
 
-```powershell
-git clone --branch dev https://github.com/Derek-Sykes/dylans-lawn-care-demo.git
-cd dylans-lawn-care-demo
-.\start.bat
-```
+The database, Google tokens, encryption key and local operator credential are private. They are never publication inputs. Keep complete backups outside this repository, in encrypted storage. Follow [backup and restore](docs/LOCAL_OPERATIONS.md) and [privacy details](docs/PRIVACY.md). Losing the encryption key makes stored Google credentials unusable; copying only the SQLite file is not a complete backup.
 
-The GitHub **Website checks and deployment** workflow also has a **Run workflow** button. A run on `dev` checks only; a run on `main` also publishes and verifies the current main release. Read [deployment and validation](docs/DEPLOYMENT.md) for requirements and actual verification status.
+The static image is deliberately built from only the existing `Dockerfile`, `Caddyfile` and `dist/`. The root `.dockerignore` keeps its existing allowlist. Local Compose adds `Caddyfile.local` as a read-only configuration mount and builds the separate `booking/Dockerfile`. The public Caddy service proxies only `/api/public/*`; admin routes and OAuth stay on the separate admin listener.
 
-The updater follows the current `dev` or `main` branch. It refuses uncommitted/untracked work, feature branches, and history that cannot safely advance to the remote. It fetches and fast-forwards, builds and verifies a candidate, then replaces this local container. A failed build leaves the prior packaged container running; source may already have advanced. It never force-resets Git or removes unrelated Docker resources. In dev mode, edits are visible immediately because its source is mounted.
+## Checks and release boundary
 
-The included GitHub check builds the container, verifies the exact files and source revision, tests health and demo indexing headers, and checks private files are inaccessible. That check has read-only repository permission. Only the separate main release job can publish an image and release manifest. Continue development on `dev`; open a PR with base `main`, wait for **Check website container**, and merge when release is authorized. The initial public demo setup is authorized; it is not standing permission for every future main merge. Repository protection settings must be configured/verified separately; files alone do not enforce them.
+`check` builds both images, verifies every static file against the checkout, checks the packaged revision, health, demo noindex headers and private-file exclusions, runs Go tests, and starts a temporary isolated booking stack for authentication, CSRF, settings and route-isolation checks. It uses no Google credentials and removes only its own temporary containers and data afterward. Your local booking volume is untouched.
 
-`/version.json` reports the packaged commit, with `-dirty` for a checkout containing uncommitted changes. In dev mode, this identifies the base build; live mounted edits can be newer. Read the parent client's QA record for the actual tested revision and visual checks.
+Developer launcher regression tests are in [scripts/test-launchers.ps1](scripts/test-launchers.ps1). They create isolated source fixtures and explicitly named test projects to verify collision handling, two clones, shared-shell settings, restart, mounted edits, safe update refusals and data persistence. They never update the real source branch or contact a remote Git server.
 
-## Recording sequence
+The root Dockerfile, active `compose.production.yaml`, `server/` scripts and main release behavior remain the static website deployment. The existing GitHub workflow can still use PowerShell `check` on Linux, then publish only the root static image after a separately authorized main merge. **No booking backend, data or credentials are published by that workflow.** See [existing deployment records](docs/DEPLOYMENT.md).
 
-1. Run `start.bat`. Open the local preview at normal zoom and hide development panels.
-2. Pause on the opening photo and headline, then point out the direct contact action.
-3. Scroll slowly through the supported services and authentic project photos.
-4. Show the sourced customer review excerpts and the service-area/contact section.
-5. Show the narrow mobile layout, menu and contact controls. Explain the next step as a quote conversation; do not trigger a call or send a message during the recording.
-
-Aim for 60–90 seconds. Present this as a demonstration for Dylan's review. Confirm copy, photo use, service area and the quote/contact process with the owner before a final client launch.
-
-## Public demonstration and final client launch
-
-The September 10 request authorizes publishing this demonstration at `demo.xsolutionsmd.com` on the existing Oracle server and setting up automatic main releases. It supersedes the earlier local-only deployment boundary for this demo. It does not establish owner acceptance, a purchased client domain or a final business launch. Existing noindex controls and the requested presentation remain in place; noindex discourages indexing but does not restrict who can open the address.
-
-The static image uses HTTP on internal port 8080. `compose.local.yaml` binds that port only to the local computer. `compose.production.yaml` publishes no host ports: the shared Caddy proxy sends `demo.xsolutionsmd.com` requests over the external `xsolutions-proxy` network to `dylan-demo:8080`. Releases support AMD64 and ARM64, and Oracle verifies the ARM64 image. Certificates and the company website belong to separate stacks. See [deployment operations](docs/DEPLOYMENT.md).
-
-After Dylan accepts the scope and approves content/assets, agree final domain and hosting ownership, purchase/connect the selected domain under fresh authorization, and configure HTTPS for that host. Replace the demo indexing controls only for the approved final release, set real canonical/metadata URLs where used, verify all contact destinations and the chosen quote process, then test domain HTTPS and mobile behavior. This demo has its own release job, timer and website container.
-
-The same Git source and `dist/` are the publication inputs, so the final client transition does not require redesigning the page.
-
-## Workflow provenance
-
-The launcher behavior was adapted from the actual VoiceVault `voicevault.ps1`, `scripts/voicevault.ps1`, `dev/voicevault-dev.ps1` and development guide, plus the verified X Solutions Caddy/image workflow. Useful conventions retained: a single source tree, separate mounted and packaged modes, health-checked start, safe dev/main updates and intentional release gates. VoiceVault's database, AI tools, Portainer integration and credential volumes are unnecessary for this static demo and were not copied.
+[compose.booking.production.yaml](compose.booking.production.yaml) is a future template only. It is never selected by the launchers or release workflow. A real booking deployment needs a separately authorized reviewed release, approved public/admin HTTPS origins, appropriate Google configuration, backup/restore verification and shared-proxy routing. No final client launch or owner acceptance is established by this local implementation.

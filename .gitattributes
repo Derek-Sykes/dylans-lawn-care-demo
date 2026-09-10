@@ -6,3 +6,5 @@
 *.bat text eol=crlf
 Dockerfile text eol=lf
 Caddyfile text eol=lf
+Caddyfile.local text eol=lf
+website text eol=lf

@@ -5,3 +5,11 @@ services:
         source: ./dist
         target: /srv
         read_only: true
+  booking:
+    environment:
+      WEB_DIR: /app/web
+    volumes:
+      - type: bind
+        source: ./booking/web
+        target: /app/web
+        read_only: true

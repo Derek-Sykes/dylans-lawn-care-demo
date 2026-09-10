@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+case "$(uname -s)" in
+  MINGW*|MSYS*) ROOT=$(cygpath -m "$ROOT"); export MSYS_NO_PATHCONV=1 ;;
+esac
+cd "$ROOT"
+command=start
+if (( $# )); then command=$1; shift; fi
+no_open=false
+for argument in "$@"; do
+  case "$argument" in --no-open|-NoOpen) no_open=true ;; *) echo "Unknown option: $argument" >&2; exit 1 ;; esac
+done
+case "$command" in build|start|dev|update|stop|status|logs|check|open|help) ;; *) echo 'Unknown command. Run ./website help.' >&2; exit 1 ;; esac
+if [[ "$command" == help ]]; then
+  echo 'Usage: ./website start|dev|build|check|update|stop|status|logs|open [--no-open]'
+  echo 'Only Docker is needed to start. Git is needed for safe updates. Ports and booking data persist.'
+  exit 0
+fi
+umask 077
+mkdir -p .local
+STATE="$ROOT/.local/runtime.env"
+if ! mkdir "$ROOT/.local/launcher.guard" 2>/dev/null; then
+  echo 'Another launcher is using this clone. If one crashed, remove .local/launcher.guard after confirming it is no longer running.' >&2; exit 1
+fi
+printf '%s\n' "$$" > "$ROOT/.local/launcher.guard/pid"
+trap 'rm -f -- "$ROOT/.local/launcher.guard/pid"; rmdir "$ROOT/.local/launcher.guard" 2>/dev/null || true' EXIT
+setting() {
+  local name=$1 fallback=$2 value="${!1:-}" file line
+  if [[ -n "$value" ]]; then printf '%s' "$value"; return; fi
+  for file in "$ROOT/.env" "$STATE"; do
+    if [[ -f "$file" ]]; then
+      line=$(sed -n "s/^$name=//p" "$file" | tail -n 1 | tr -d '\r')
+      if [[ -n "$line" ]]; then printf '%s' "$line"; return; fi
+    fi
+  done
+  printf '%s' "$fallback"
+}
+secret() { od -An -N32 -tx1 /dev/urandom | tr -d ' \n'; }
+DYLAN_INSTALL_ID=$(setting DYLAN_INSTALL_ID "$(secret | cut -c1-12)")
+DYLAN_PROJECT=$(setting DYLAN_PROJECT "dylan-$DYLAN_INSTALL_ID")
+initialize_port() {
+  local name=$1 fallback=$2 chosen previous requested="${!1:-}"
+  chosen=$fallback; previous=''
+  if [[ -f "$STATE" ]]; then
+    chosen=$(sed -n "s/^$name=//p" "$STATE" | tail -n 1 | tr -d '\r')
+    previous=$(sed -n "s/^$name"'_PREFERENCE=//p' "$STATE" | tail -n 1 | tr -d '\r')
+  fi
+  [[ -n "$chosen" ]] || chosen=$fallback
+  if [[ -z "$requested" && -f "$ROOT/.env" ]]; then requested=$(sed -n "s/^$name=//p" "$ROOT/.env" | tail -n 1 | tr -d '\r'); fi
+  if [[ -n "$requested" && "$requested" != "$previous" ]]; then chosen=$requested; previous=$requested; fi
+  printf -v "$name" '%s' "$chosen"
+  printf -v "$name"'_PREFERENCE' '%s' "$previous"
+}
+initialize_port DYLAN_PORT 4177
+initialize_port DYLAN_ADMIN_PORT 4178
+BOOTSTRAP_TOKEN=''
+if [[ -f "$STATE" ]]; then
+  BOOTSTRAP_TOKEN=$(sed -n 's/^BOOTSTRAP_TOKEN=//p' "$STATE" | tail -n 1 | tr -d '\r')
+  [[ "$BOOTSTRAP_TOKEN" =~ ^[a-f0-9]{64}$ ]] || { echo 'Private setup is incomplete. Restore .local/runtime.env from the matching backup; do not reset an existing database.' >&2; exit 1; }
+else
+  BOOTSTRAP_TOKEN=$(secret)
+fi
+[[ "$DYLAN_PROJECT" =~ ^[a-z0-9][a-z0-9_-]{0,49}$ ]] || { echo 'Invalid DYLAN_PROJECT.' >&2; exit 1; }
+for port in "$DYLAN_PORT" "$DYLAN_ADMIN_PORT"; do
+  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1024 && port <= 65535 )) || { echo 'Ports must be 1024-65535.' >&2; exit 1; }
+done
+GOOGLE_CLIENT_ID=$(setting GOOGLE_CLIENT_ID '')
+GOOGLE_OAUTH_MODE=$(setting GOOGLE_OAUTH_MODE '')
+GOOGLE_CLIENT_SECRET=$(setting GOOGLE_CLIENT_SECRET '')
+DYLAN_WEB_IMAGE="$DYLAN_PROJECT:local"
+DYLAN_BOOKING_IMAGE="$DYLAN_PROJECT-booking:local"
+export DYLAN_INSTALL_ID DYLAN_PROJECT DYLAN_PORT DYLAN_ADMIN_PORT BOOTSTRAP_TOKEN
+export GOOGLE_CLIENT_ID GOOGLE_OAUTH_MODE GOOGLE_CLIENT_SECRET DYLAN_WEB_IMAGE DYLAN_BOOKING_IMAGE
+origins() {
+  PUBLIC_ORIGIN="http://127.0.0.1:$DYLAN_PORT"
+  ADMIN_ORIGIN="http://127.0.0.1:$DYLAN_ADMIN_PORT"
+  export PUBLIC_ORIGIN ADMIN_ORIGIN
+}
+save_state() {
+  printf 'DYLAN_INSTALL_ID=%s\nDYLAN_PROJECT=%s\nDYLAN_PORT=%s\nDYLAN_ADMIN_PORT=%s\nDYLAN_PORT_PREFERENCE=%s\nDYLAN_ADMIN_PORT_PREFERENCE=%s\nBOOTSTRAP_TOKEN=%s\n' \
+    "$DYLAN_INSTALL_ID" "$DYLAN_PROJECT" "$DYLAN_PORT" "$DYLAN_ADMIN_PORT" "$DYLAN_PORT_PREFERENCE" "$DYLAN_ADMIN_PORT_PREFERENCE" "$BOOTSTRAP_TOKEN" > "$STATE.new"
+  chmod 600 "$STATE.new"
+  mv -f -- "$STATE.new" "$STATE"
+}
+origins
+save_state
+compose() { docker compose --project-directory "$ROOT" --project-name "$DYLAN_PROJECT" --file "$ROOT/compose.local.yaml" "$@"; }
+assert_docker() {
+  type docker >/dev/null 2>&1 || { echo 'Install Docker Desktop with Linux containers.' >&2; exit 1; }
+  docker compose version
+  [[ "$(docker info --format '{{.OSType}}' 2>/dev/null)" == linux ]] || { echo 'Start Docker with Linux containers and wait until it is ready.' >&2; exit 1; }
+}
+revision() {
+  DYLAN_REVISION=local
+  if type git >/dev/null 2>&1 && git rev-parse HEAD >/dev/null 2>&1; then
+    DYLAN_REVISION=$(git rev-parse HEAD)
+    if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then DYLAN_REVISION="$DYLAN_REVISION-dirty"; fi
+  fi
+  export DYLAN_REVISION
+}
+build() {
+  [[ -f "$ROOT/dist/index.html" ]] || { echo 'Missing dist/index.html.' >&2; exit 1; }
+  revision
+  compose build
+  docker run --rm "$DYLAN_WEB_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+}
+check_static() (
+  local name="dylan-static-check-$(secret | cut -c1-12)"
+  trap 'docker rm --force "$name" >/dev/null 2>&1 || true' EXIT
+  docker run --detach --name "$name" "$DYLAN_WEB_IMAGE"
+  docker run --rm --network "container:$name" --env DYLAN_REVISION \
+    --mount "type=bind,source=$ROOT/dist,target=/expected,readonly" \
+    --mount "type=bind,source=$ROOT/scripts,target=/checks,readonly" \
+    --entrypoint sh "$DYLAN_WEB_IMAGE" /checks/check-static.sh
+)
+port_usable() {
+  local port=$1 bindings probe output
+  bindings=$(docker ps --filter "label=com.docker.compose.project=$DYLAN_PROJECT" --format '{{.Ports}}')
+  if [[ "$bindings" == *"127.0.0.1:$port->"* ]]; then return 0; fi
+  bindings=$(docker ps --format '{{.Ports}}')
+  if [[ "$bindings" == *"127.0.0.1:$port->"* ]]; then return 1; fi
+  # Ask Docker to bind: works across Linux/macOS/Git Bash without socket tools or slow SYN retries.
+  probe="dylan-port-check-$(secret | cut -c1-12)"
+  if output=$(docker run --detach --rm --name "$probe" --publish "127.0.0.1:$port:8080" --entrypoint sh "$DYLAN_WEB_IMAGE" -c 'sleep 10' 2>&1); then
+    docker rm --force "$probe" >/dev/null 2>&1; return 0
+  fi
+  docker rm --force "$probe" >/dev/null 2>&1 || true
+  if ! grep -Eqi 'port is already allocated|address already in use|ports are not available|bind.*forbidden|failed to bind' <<< "$output"; then
+    printf 'Could not probe the local port. %s\n' "$output" >&2; exit 2
+  fi
+  return 1
+}
+next_port() { if (( $1 >= 65535 )); then echo 1024; else echo $(( $1 + 1 )); fi; }
+select_ports() {
+  local attempts=0
+  while ! port_usable "$DYLAN_PORT"; do
+    DYLAN_PORT=$(next_port "$DYLAN_PORT"); attempts=$((attempts + 1))
+    (( attempts <= 200 )) || { echo 'No public port available.' >&2; return 1; }
+  done
+  while [[ "$DYLAN_ADMIN_PORT" == "$DYLAN_PORT" ]] || ! port_usable "$DYLAN_ADMIN_PORT"; do
+    DYLAN_ADMIN_PORT=$(next_port "$DYLAN_ADMIN_PORT"); attempts=$((attempts + 1))
+    (( attempts <= 400 )) || { echo 'No admin port available.' >&2; return 1; }
+  done
+  export DYLAN_PORT DYLAN_ADMIN_PORT
+  origins
+}
+start_stack() {
+  local mode=$1 temporary=$2 attempt output
+  local extras=()
+  [[ "$mode" != dev ]] || extras=(--file "$ROOT/compose.dev.yaml")
+  for (( attempt=0; attempt<12; attempt++ )); do
+    select_ports
+    [[ "$temporary" == true ]] || save_state
+    if output=$(compose "${extras[@]}" up --detach --no-build --wait --wait-timeout 100 2>&1); then
+      printf '%s\n' "$output"; return
+    fi
+    if ! grep -Eqi 'port is already allocated|address already in use|ports are not available|bind.*forbidden|failed to bind' <<< "$output"; then
+      printf 'The local application could not become ready.\n%s\n' "$output" >&2; return 1
+    fi
+    compose down >/dev/null 2>&1 || true
+    DYLAN_PORT=$(next_port "$DYLAN_PORT"); DYLAN_ADMIN_PORT=$(next_port "$DYLAN_ADMIN_PORT")
+  done
+  echo 'Ports kept changing while the application started. Try again.' >&2; return 1
+}
+check_application() (
+  docker build --target test "$ROOT/booking"
+  DYLAN_PROJECT="dylan-check-$(secret | cut -c1-12)"
+  DYLAN_PORT=24177; DYLAN_ADMIN_PORT=24178
+  BOOTSTRAP_TOKEN=$(secret); GOOGLE_CLIENT_ID=''; GOOGLE_CLIENT_SECRET=''; GOOGLE_OAUTH_MODE=desktop
+  export DYLAN_PROJECT DYLAN_PORT DYLAN_ADMIN_PORT BOOTSTRAP_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_OAUTH_MODE
+  trap 'compose down --volumes >/dev/null 2>&1 || true' EXIT
+  start_stack start true
+  docker run --rm --network "$DYLAN_PROJECT""_default" \
+    --env PUBLIC_ORIGIN --env ADMIN_ORIGIN --env BOOTSTRAP_TOKEN \
+    --mount "type=bind,source=$ROOT/scripts,target=/checks,readonly" \
+    python:3.14-alpine python /checks/check-application.py
+)
+show_site() {
+  printf 'Public website: %s/\nAdmin workspace: %s/\n' "$PUBLIC_ORIGIN" "$ADMIN_ORIGIN"
+  if [[ "$no_open" == false ]]; then
+    local url="$ADMIN_ORIGIN/#setup=$BOOTSTRAP_TOKEN"
+    if type powershell.exe >/dev/null 2>&1; then powershell.exe -NoProfile -Command 'Start-Process ($env:ADMIN_ORIGIN + "/#setup=" + $env:BOOTSTRAP_TOKEN)' >/dev/null 2>&1 || echo 'Could not open the browser. Run ./website open again.'
+    elif type open >/dev/null 2>&1; then open "$url" >/dev/null 2>&1 || echo 'Could not open the browser. Run ./website open on a desktop.'
+    elif type xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 || echo 'Could not open the browser. Run ./website open on a desktop.'
+    else echo 'Browser opening is unavailable here. Run ./website open on a desktop.'; fi
+  fi
+}
+update_source() {
+  type git >/dev/null 2>&1 || { echo 'Git is required only for update.' >&2; return 1; }
+  local branch
+  branch=$(git branch --show-current)
+  [[ "$branch" == dev || "$branch" == main ]] || { echo 'Update follows only the current dev or main branch.' >&2; return 1; }
+  [[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo 'Commit or stash local changes before update. No files were overwritten.' >&2; return 1; }
+  git fetch origin "$branch"
+  git merge-base --is-ancestor HEAD "origin/$branch" || { echo 'History is ahead or diverged. Update will not reset your work.' >&2; return 1; }
+  git merge --ff-only "origin/$branch"
+}
+if [[ "$command" == open ]]; then show_site; exit 0; fi
+assert_docker
+case "$command" in
+  build|start|dev|check|update)
+    [[ "$command" != update ]] || update_source
+    build
+    check_static
+    [[ "$command" != check ]] || check_application
+    if [[ "$command" == start || "$command" == dev || "$command" == update ]]; then start_stack "$command" false; show_site; fi
+    ;;
+  stop) compose down; echo 'Stopped this install. Booking data is preserved.' ;;
+  status) compose ps; printf 'Public website: %s/\nAdmin workspace: %s/\n' "$PUBLIC_ORIGIN" "$ADMIN_ORIGIN" ;;
+  logs) compose logs --tail 80 ;;
+esac

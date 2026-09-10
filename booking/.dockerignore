@@ -1,0 +1,11 @@
+**
+!*.go
+!go.mod
+!go.sum
+!Dockerfile
+!web/
+!web/index.html
+!web/admin.css
+!web/admin.js
+!config/
+!config/google-client.json

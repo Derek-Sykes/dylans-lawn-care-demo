@@ -12,7 +12,7 @@ Customers provide their name, email address, phone number, property address, sel
 
 ## Storage and access
 
-Booking records and settings are stored in the installation's local SQLite database. Google access and refresh tokens are encrypted using a key stored with the installation's persistent data. The admin interface uses a session cookie for authentication. Customer details are available through the authenticated admin interface and the connected owner's Google Calendar, not through the public appointment listing.
+Booking records and settings are stored in the installation's local SQLite database. Imported private Google client configuration, Google access and refresh tokens, and the connected owner identity are encrypted using a key stored with the installation's persistent data. The admin interface uses a session cookie for authentication. Customer details are available through the authenticated admin interface and the connected owner's Google Calendar, not through the public appointment listing.
 
 The software does not include advertising, data sales, marketing email delivery, or analytics tracking. It does not use Google user data to train general-purpose AI or machine-learning models. Google user data is used only to provide the scheduling features the owner authorizes. Any transfer of Google user data is limited to providing those features, as described in the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy), including its Limited Use requirements.
 

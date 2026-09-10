@@ -5,152 +5,267 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $script:SiteRoot = $PSScriptRoot
+$script:StatePath = Join-Path $PSScriptRoot '.local/runtime.env'
+$script:StateLock = $null
+$script:InitialEnvironment = @{}
+foreach ($key in @('DYLAN_INSTALL_ID','DYLAN_PROJECT','DYLAN_PORT','DYLAN_ADMIN_PORT','DYLAN_PORT_PREFERENCE','DYLAN_ADMIN_PORT_PREFERENCE','BOOTSTRAP_TOKEN','PUBLIC_ORIGIN','ADMIN_ORIGIN','DYLAN_WEB_IMAGE','DYLAN_BOOKING_IMAGE','DYLAN_REVISION','GOOGLE_CLIENT_ID','GOOGLE_OAUTH_MODE','GOOGLE_CLIENT_SECRET')) {
+  $script:InitialEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
+}
 
 function Invoke-Native([string]$Program, [string[]]$Arguments) {
   & $Program @Arguments
   if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE." }
 }
-
+function Read-Settings([string]$Path) {
+  $values = @{}
+  if (Test-Path -LiteralPath $Path) {
+    foreach ($line in Get-Content -LiteralPath $Path) {
+      if ($line -match '^([A-Z][A-Z0-9_]*)=(.*)$') { $values[$Matches[1]] = $Matches[2].Trim() }
+    }
+  }
+  return $values
+}
 function Get-Setting([string]$Name, [string]$Default) {
   $value = [Environment]::GetEnvironmentVariable($Name)
   if ($value) { return $value }
-  $envFile = Join-Path $script:SiteRoot '.env'
-  if (Test-Path -LiteralPath $envFile) {
-    $line = Get-Content -LiteralPath $envFile | Where-Object { $_ -match "^$Name=" } | Select-Object -Last 1
-    if ($line) { return ($line -split '=', 2)[1].Trim() }
-  }
+  if ($script:Overrides.ContainsKey($Name)) { return $script:Overrides[$Name] }
+  if ($script:Saved.ContainsKey($Name)) { return $script:Saved[$Name] }
   return $Default
 }
-
-function Assert-Docker {
-  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Install Docker Desktop and select Linux containers, then try again.' }
-  Invoke-Native docker @('compose','version')
-  & docker info --format '{{.OSType}}' | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'Start Docker Desktop and wait until its engine is ready.' }
+function New-Secret {
+  $bytes = New-Object byte[] 32
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+  return [BitConverter]::ToString($bytes).Replace('-','').ToLowerInvariant()
 }
-
+function Initialize-Port([string]$Name, [string]$Default) {
+  $preferenceName = "${Name}_PREFERENCE"
+  $requested = [Environment]::GetEnvironmentVariable($Name)
+  if (-not $requested -and $script:Overrides.ContainsKey($Name)) { $requested = $script:Overrides[$Name] }
+  $chosen = $Default
+  if ($script:Saved.ContainsKey($Name)) { $chosen = $script:Saved[$Name] }
+  $previous = $script:Saved[$preferenceName]
+  if ($requested -and $requested -ne $previous) { $chosen = $requested; $previous = $requested }
+  [Environment]::SetEnvironmentVariable($Name,$chosen)
+  [Environment]::SetEnvironmentVariable($preferenceName,$previous)
+}
+function Save-State {
+  $lines = @(
+    "DYLAN_INSTALL_ID=$env:DYLAN_INSTALL_ID",
+    "DYLAN_PROJECT=$env:DYLAN_PROJECT",
+    "DYLAN_PORT=$env:DYLAN_PORT",
+    "DYLAN_ADMIN_PORT=$env:DYLAN_ADMIN_PORT",
+    "DYLAN_PORT_PREFERENCE=$env:DYLAN_PORT_PREFERENCE",
+    "DYLAN_ADMIN_PORT_PREFERENCE=$env:DYLAN_ADMIN_PORT_PREFERENCE",
+    "BOOTSTRAP_TOKEN=$env:BOOTSTRAP_TOKEN"
+  )
+  $temporary = "$script:StatePath.new"
+  [IO.File]::WriteAllText($temporary, ($lines -join [char]10) + [char]10, (New-Object Text.UTF8Encoding($false)))
+  if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Invoke-Native chmod @('600',$temporary) }
+  Move-Item -LiteralPath $temporary -Destination $script:StatePath -Force
+}
+function Initialize-Local {
+  $local = Join-Path $script:SiteRoot '.local'
+  New-Item -ItemType Directory -Path $local -Force | Out-Null
+  $guard = Join-Path $local 'launcher.guard'
+  try { New-Item -ItemType Directory -Path $guard -ErrorAction Stop | Out-Null }
+  catch { throw 'Another launcher is using this clone. Wait for it to finish. If a launcher crashed, remove .local/launcher.guard after confirming it is no longer running.' }
+  $script:StateLock = $guard
+  [IO.File]::WriteAllText((Join-Path $guard 'pid'), "$PID")
+  $script:Saved = Read-Settings $script:StatePath
+  if ((Test-Path -LiteralPath $script:StatePath) -and $script:Saved['BOOTSTRAP_TOKEN'] -notmatch '^[a-f0-9]{64}$') {
+    throw 'The private setup file is incomplete. Restore .local/runtime.env from the matching backup; do not reset an existing database.'
+  }
+  $script:Overrides = Read-Settings (Join-Path $script:SiteRoot '.env')
+  $env:DYLAN_INSTALL_ID = Get-Setting 'DYLAN_INSTALL_ID' ([guid]::NewGuid().ToString('N').Substring(0,12))
+  $env:DYLAN_PROJECT = Get-Setting 'DYLAN_PROJECT' "dylan-$env:DYLAN_INSTALL_ID"
+  Initialize-Port 'DYLAN_PORT' '4177'
+  Initialize-Port 'DYLAN_ADMIN_PORT' '4178'
+  if ($script:Saved.ContainsKey('BOOTSTRAP_TOKEN')) { $env:BOOTSTRAP_TOKEN = $script:Saved['BOOTSTRAP_TOKEN'] }
+  else { $env:BOOTSTRAP_TOKEN = New-Secret }
+  if ($env:DYLAN_PROJECT -notmatch '^[a-z0-9][a-z0-9_-]{0,49}$') { throw 'DYLAN_PROJECT must be 1-50 lowercase letters, numbers, underscores or hyphens.' }
+  foreach ($value in @($env:DYLAN_PORT,$env:DYLAN_ADMIN_PORT)) {
+    if ($value -notmatch '^\d+$' -or [int]$value -lt 1024 -or [int]$value -gt 65535) { throw 'Local ports must be numbers from 1024 to 65535.' }
+  }
+  foreach ($key in @('GOOGLE_CLIENT_ID','GOOGLE_OAUTH_MODE','GOOGLE_CLIENT_SECRET')) {
+    [Environment]::SetEnvironmentVariable($key, (Get-Setting $key ''))
+  }
+  $env:DYLAN_WEB_IMAGE = "$($env:DYLAN_PROJECT):local"
+  $env:DYLAN_BOOKING_IMAGE = "$($env:DYLAN_PROJECT)-booking:local"
+  Set-Origins
+  Save-State
+}
+function Set-Origins {
+  $env:PUBLIC_ORIGIN = "http://127.0.0.1:$env:DYLAN_PORT"
+  $env:ADMIN_ORIGIN = "http://127.0.0.1:$env:DYLAN_ADMIN_PORT"
+}
+function Get-Compose([switch]$DevMode) {
+  $arguments = @('compose','--project-directory',$script:SiteRoot,'--project-name',$env:DYLAN_PROJECT,'--file',(Join-Path $script:SiteRoot 'compose.local.yaml'))
+  if ($DevMode) { $arguments += @('--file',(Join-Path $script:SiteRoot 'compose.dev.yaml')) }
+  return $arguments
+}
+function Assert-Docker {
+  if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Install Docker Desktop with Linux containers, then try again.' }
+  Invoke-Native docker @('compose','version')
+  $engine = & docker info --format '{{.OSType}}' 2>$null
+  if ($LASTEXITCODE -ne 0 -or $engine -ne 'linux') { throw 'Start Docker Desktop with Linux containers and wait until it is ready.' }
+}
 function Set-Revision {
   $env:DYLAN_REVISION = 'local'
   if ((Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $script:SiteRoot '.git'))) {
-    $revision = & git rev-parse HEAD
+    $revision = & git -C $script:SiteRoot rev-parse HEAD 2>$null
     if ($LASTEXITCODE -eq 0 -and $revision) {
       $env:DYLAN_REVISION = $revision.Trim()
-      $dirty = & git status --porcelain --untracked-files=all
+      $dirty = & git -C $script:SiteRoot status --porcelain --untracked-files=all
       if ($LASTEXITCODE -ne 0) { throw 'Could not inspect Git changes.' }
       if ($dirty) { $env:DYLAN_REVISION += '-dirty' }
     }
   }
 }
-
 function Build-Site {
-  if (-not (Test-Path -LiteralPath 'dist/index.html')) { throw 'The public page dist/index.html is missing.' }
+  if (-not (Test-Path -LiteralPath (Join-Path $script:SiteRoot 'dist/index.html'))) { throw 'The public page dist/index.html is missing.' }
   Set-Revision
-  Invoke-Native docker ($script:Compose + @('build'))
-  Invoke-Native docker @('run','--rm',$script:Image,'caddy','validate','--config','/etc/caddy/Caddyfile','--adapter','caddyfile')
+  Invoke-Native docker ((Get-Compose) + @('build'))
+  Invoke-Native docker @('run','--rm',$env:DYLAN_WEB_IMAGE,'caddy','validate','--config','/etc/caddy/Caddyfile','--adapter','caddyfile')
 }
-
-function Test-Image {
-  $checkName = "dylan-check-$([guid]::NewGuid().ToString('N').Substring(0,10))"
-  $download = Join-Path ([System.IO.Path]::GetTempPath()) "$checkName.download"
-  $started = $false
+function Test-Static {
+  $name = "dylan-static-check-$([guid]::NewGuid().ToString('N').Substring(0,12))"
   try {
-    Invoke-Native docker @('run','--detach','--rm','--name',$checkName,'--publish','127.0.0.1::8080',$script:Image)
-    $started = $true
-    $address = & docker port $checkName '8080/tcp'
-    if ($LASTEXITCODE -ne 0 -or $address -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'Could not find the isolated container check port.' }
-    $baseUrl = "http://127.0.0.1:$($Matches[1])"
-    $ready = $false
-    for ($attempt = 0; $attempt -lt 25; $attempt++) {
-      try {
-        $health = Invoke-WebRequest "$baseUrl/healthz" -UseBasicParsing -TimeoutSec 2
-        if ($health.StatusCode -eq 200) { $ready = $true; break }
-      } catch { Start-Sleep -Milliseconds 300 }
+    Invoke-Native docker @('run','--detach','--name',$name,$env:DYLAN_WEB_IMAGE)
+    Invoke-Native docker @('run','--rm','--network',"container:$name",'--env','DYLAN_REVISION',
+      '--mount',"type=bind,source=$script:SiteRoot/dist,target=/expected,readonly",
+      '--mount',"type=bind,source=$script:SiteRoot/scripts,target=/checks,readonly",
+      '--entrypoint','sh',$env:DYLAN_WEB_IMAGE,'/checks/check-static.sh')
+  } finally { & docker rm --force $name 2>$null | Out-Null }
+}
+function Test-Port([int]$Port) {
+  $bindings = & docker ps --filter "label=com.docker.compose.project=$env:DYLAN_PROJECT" --format '{{.Ports}}'
+  if (($bindings -join ' ') -match "127\.0\.0\.1:$Port->") { return $true }
+  $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,$Port)
+  $listener.Server.ExclusiveAddressUse = $true
+  try { $listener.Start(); return $true }
+  catch { return $false }
+  finally { $listener.Stop() }
+}
+function Next-Port([int]$Port) {
+  if ($Port -ge 65535) { return 1024 }
+  return $Port + 1
+}
+function Select-Ports {
+  $public = [int]$env:DYLAN_PORT; $admin = [int]$env:DYLAN_ADMIN_PORT; $attempts = 0
+  while (-not (Test-Port $public)) {
+    $public = Next-Port $public; $attempts++
+    if ($attempts -gt 200) { throw 'Could not find an available public port.' }
+  }
+  while ($admin -eq $public -or -not (Test-Port $admin)) {
+    $admin = Next-Port $admin; $attempts++
+    if ($attempts -gt 400) { throw 'Could not find an available admin port.' }
+  }
+  $env:DYLAN_PORT = "$public"; $env:DYLAN_ADMIN_PORT = "$admin"
+  Set-Origins
+}
+function Start-Stack([switch]$DevMode, [switch]$Temporary) {
+  for ($attempt = 0; $attempt -lt 12; $attempt++) {
+    Select-Ports
+    if (-not $Temporary) { Save-State }
+    $arguments = (Get-Compose -DevMode:$DevMode) + @('up','--detach','--no-build','--wait','--wait-timeout','100')
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $output = (& docker @arguments 2>&1 | Out-String)
+    $result = $LASTEXITCODE
+    $ErrorActionPreference = $previousPreference
+    if ($result -eq 0) { Write-Host $output.TrimEnd(); return }
+    if ($output -notmatch '(?i)port is already allocated|address already in use|ports are not available|bind.*forbidden|failed to bind') {
+      throw "The local application could not become ready. $output"
     }
-    if (-not $ready) { throw 'The candidate container did not become ready.' }
-    $index = Invoke-WebRequest "$baseUrl/" -UseBasicParsing -TimeoutSec 10
-    if ($index.Headers['X-Robots-Tag'] -notmatch 'noindex') { throw 'Demo indexing protection is missing.' }
-    $version = Invoke-RestMethod "$baseUrl/version.json" -TimeoutSec 10
-    if ($version.revision -ne $env:DYLAN_REVISION) { throw 'The packaged source revision does not match the build.' }
-    $publicRoot = (Resolve-Path -LiteralPath 'dist').Path
-    $files = @(Get-ChildItem -LiteralPath $publicRoot -Recurse -File)
-    foreach ($file in $files) {
-      $relative = $file.FullName.Substring($publicRoot.Length + 1).Replace('\','/')
-      $encodedPath = (($relative -split '/') | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
-      Invoke-WebRequest "$baseUrl/$encodedPath" -UseBasicParsing -TimeoutSec 20 -OutFile $download
-      if ((Get-FileHash -LiteralPath $download).Hash -ne (Get-FileHash -LiteralPath $file.FullName).Hash) { throw "Served file differs: $relative" }
-    }
-    foreach ($privatePath in @('/.git/config','/.env','/README.md','/Dockerfile')) {
-      $status = 0
-      try { $status = (Invoke-WebRequest "$baseUrl$privatePath" -UseBasicParsing -TimeoutSec 5).StatusCode }
-      catch { if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode } else { throw } }
-      if ($status -ne 404) { throw "Unexpected public access to $privatePath ($status)." }
-    }
-    Write-Host "Container checks passed: $($files.Count) public files match; revision, health, demo headers and private-file exclusions verified."
+    & docker @((Get-Compose) + @('down')) 2>$null | Out-Null
+    $env:DYLAN_PORT = "$(Next-Port ([int]$env:DYLAN_PORT))"
+    $env:DYLAN_ADMIN_PORT = "$(Next-Port ([int]$env:DYLAN_ADMIN_PORT))"
+  }
+  throw 'Ports kept changing while the application started. Try again.'
+}
+function Test-Application {
+  Invoke-Native docker @('build','--target','test',(Join-Path $script:SiteRoot 'booking'))
+  $keys = @('DYLAN_PROJECT','DYLAN_PORT','DYLAN_ADMIN_PORT','PUBLIC_ORIGIN','ADMIN_ORIGIN','BOOTSTRAP_TOKEN','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','GOOGLE_OAUTH_MODE')
+  $snapshot = @{}
+  foreach ($key in $keys) { $snapshot[$key] = [Environment]::GetEnvironmentVariable($key) }
+  $checkProject = "dylan-check-$([guid]::NewGuid().ToString('N').Substring(0,12))"
+  try {
+    $env:DYLAN_PROJECT = $checkProject
+    $env:DYLAN_PORT = '24177'; $env:DYLAN_ADMIN_PORT = '24178'
+    $env:BOOTSTRAP_TOKEN = New-Secret
+    $env:GOOGLE_CLIENT_ID = ''; $env:GOOGLE_CLIENT_SECRET = ''
+    $env:GOOGLE_OAUTH_MODE = 'desktop'
+    Start-Stack -Temporary
+    Invoke-Native docker @('run','--rm','--network',"$($checkProject)_default",
+      '--env','PUBLIC_ORIGIN','--env','ADMIN_ORIGIN','--env','BOOTSTRAP_TOKEN',
+      '--mount',"type=bind,source=$script:SiteRoot/scripts,target=/checks,readonly",
+      'python:3.14-alpine','python','/checks/check-application.py')
   } finally {
-    if ($started) { & docker rm --force $checkName | Out-Null }
-    if (Test-Path -LiteralPath $download) { Remove-Item -LiteralPath $download -Force }
+    & docker @((Get-Compose) + @('down','--volumes')) 2>$null | Out-Null
+    foreach ($key in $keys) { [Environment]::SetEnvironmentVariable($key,$snapshot[$key]) }
   }
 }
-
 function Show-Site {
-  Write-Host "Local preview: $script:SiteUrl"
+  Write-Host "Public website: $env:PUBLIC_ORIGIN/"
+  Write-Host "Admin workspace: $env:ADMIN_ORIGIN/"
   if (-not $NoOpen) {
-    try { Start-Process $script:SiteUrl }
-    catch { Write-Warning "Open $script:SiteUrl in your browser." }
+    $url = "$env:ADMIN_ORIGIN/#setup=$env:BOOTSTRAP_TOKEN"
+    try {
+      if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { Start-Process $url }
+      elseif (Get-Command xdg-open -ErrorAction SilentlyContinue) { & xdg-open $url 2>$null | Out-Null }
+      elseif (Get-Command open -ErrorAction SilentlyContinue) { & open $url 2>$null | Out-Null }
+      else { Write-Host 'Browser opening is unavailable here. Use the open command on a desktop.' }
+    } catch { Write-Warning 'Could not open the browser. Run the open command again on a desktop.' }
   }
 }
-
 function Update-Source {
-  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git is required for update.' }
-  if (-not (Test-Path -LiteralPath '.git')) { throw 'This folder is not a Git clone. Use start for the local demo.' }
-  $branch = & git branch --show-current
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git is required only for update.' }
+  $branch = & git -C $script:SiteRoot branch --show-current 2>$null
   if ($LASTEXITCODE -ne 0 -or $branch -notin @('dev','main')) { throw 'Update follows the current dev or main branch. Switch to dev before updating.' }
-  $dirty = & git status --porcelain --untracked-files=all
+  $dirty = & git -C $script:SiteRoot status --porcelain --untracked-files=all
   if ($LASTEXITCODE -ne 0) { throw 'Could not inspect Git changes.' }
-  if ($dirty) { throw 'Commit or stash your local changes before update. No files were overwritten.' }
-  Invoke-Native git @('fetch','origin',$branch)
-  & git merge-base --is-ancestor HEAD "origin/$branch"
+  if ($dirty) { throw 'Commit or stash local changes before update. No files were overwritten.' }
+  Invoke-Native git @('-C',$script:SiteRoot,'fetch','origin',$branch)
+  & git -C $script:SiteRoot merge-base --is-ancestor HEAD "origin/$branch"
   if ($LASTEXITCODE -ne 0) { throw 'Your branch is ahead of or diverged from origin. Update will not reset your work.' }
-  Invoke-Native git @('merge','--ff-only',"origin/$branch")
+  Invoke-Native git @('-C',$script:SiteRoot,'merge','--ff-only',"origin/$branch")
 }
-
 Push-Location $script:SiteRoot
 try {
-  $port = Get-Setting 'DYLAN_PORT' '4177'
-  $project = Get-Setting 'DYLAN_PROJECT' 'dylans-lawn-demo'
-  if ($port -notmatch '^\d+$' -or [int]$port -lt 1024 -or [int]$port -gt 65535) { throw 'DYLAN_PORT must be a port from 1024 to 65535.' }
-  if ($project -notmatch '^[a-z0-9][a-z0-9_-]*$') { throw 'DYLAN_PROJECT must use lowercase letters, numbers, underscores or hyphens.' }
-  $env:DYLAN_PORT = $port
-  $env:DYLAN_PROJECT = $project
-  $script:Image = "${project}:local"
-  $script:SiteUrl = "http://127.0.0.1:$port/"
-  $script:Compose = @('compose','--project-directory',$script:SiteRoot,'--file','compose.local.yaml')
   if ($Command -eq 'help') {
     Write-Host 'Usage: .\website.ps1 start|dev|build|check|update|stop|status|logs|open [-NoOpen]'
-    Write-Host 'start builds and checks the packaged demo. dev mounts dist for immediate edit/refresh.'
-    Write-Host 'update safely pulls the current dev/main branch, then builds, checks and starts locally.'
-  } elseif ($Command -eq 'open') { Show-Site }
-  else {
-    Assert-Docker
-    switch ($Command) {
-      { $_ -in @('build','start','dev','check','update') } {
-        if ($Command -eq 'update') { Update-Source }
-        Build-Site
-        Test-Image
-        if ($Command -in @('start','dev','update')) {
-          $runCompose = $script:Compose
-          if ($Command -eq 'dev') { $runCompose += @('--file','compose.dev.yaml') }
-          Invoke-Native docker ($runCompose + @('up','--detach','--no-build','--wait','--wait-timeout','90'))
-          Show-Site
+    Write-Host 'Only Docker is needed to start. Git is needed for safe updates. Ports and booking data persist.'
+  } else {
+    Initialize-Local
+    if ($Command -eq 'open') { Show-Site }
+    else {
+      Assert-Docker
+      switch ($Command) {
+        { $_ -in @('build','start','dev','check','update') } {
+          if ($Command -eq 'update') { Update-Source }
+          Build-Site
+          Test-Static
+          if ($Command -eq 'check') { Test-Application }
+          if ($Command -in @('start','dev','update')) {
+            Start-Stack -DevMode:($Command -eq 'dev')
+            Show-Site
+          }
         }
+        'stop' { Invoke-Native docker ((Get-Compose) + @('down')); Write-Host 'Stopped this install. Booking data is preserved.' }
+        'status' { Invoke-Native docker ((Get-Compose) + @('ps')); Write-Host "Public website: $env:PUBLIC_ORIGIN/"; Write-Host "Admin workspace: $env:ADMIN_ORIGIN/" }
+        'logs' { Invoke-Native docker ((Get-Compose) + @('logs','--tail','80')) }
       }
-      'stop' { Invoke-Native docker ($script:Compose + @('down')) }
-      'status' { Invoke-Native docker ($script:Compose + @('ps')) }
-      'logs' { Invoke-Native docker ($script:Compose + @('logs','--tail','80')) }
     }
   }
 } catch {
   Write-Host "Dylan's Lawn Care: $($_.Exception.Message)" -ForegroundColor Red
   exit 1
-} finally { Pop-Location }
-exit 0
+} finally {
+  if ($script:StateLock) {
+    Remove-Item -LiteralPath (Join-Path $script:StateLock 'pid') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $script:StateLock -ErrorAction SilentlyContinue
+  }
+  foreach ($key in $script:InitialEnvironment.Keys) { [Environment]::SetEnvironmentVariable($key,$script:InitialEnvironment[$key]) }
+  Pop-Location
+}

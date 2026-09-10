@@ -1,0 +1,44 @@
+# FUTURE TEMPLATE ONLY. Not used by website launchers, CI release, or Oracle.
+# Requires a separate reviewed release/deployment and dedicated HTTPS admin host.
+name: dylan-booking-future
+services:
+  web:
+    image: ${DYLAN_IMAGE:?Set an approved static website image digest}
+    volumes:
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+    depends_on:
+      booking:
+        condition: service_healthy
+    networks: [private, proxy]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp, /data, /config]
+  booking:
+    image: ${DYLAN_BOOKING_IMAGE:?Set a separately approved booking image digest}
+    environment:
+      DATA_DIR: /data
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set exact public HTTPS origin}
+      ADMIN_ORIGIN: ${ADMIN_ORIGIN:?Set exact separate admin HTTPS origin}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Load from private server configuration}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Set approved web OAuth client ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?Load from private server configuration}
+      GOOGLE_OAUTH_MODE: web
+    volumes:
+      - booking-data:/data
+    networks: [private, proxy]
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1:8081/healthz && wget -q -O /dev/null http://127.0.0.1:8082/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+volumes:
+  booking-data:
+    name: dylan-booking-production-data
+networks:
+  private:
+  proxy:
+    external: true
+    name: xsolutions-proxy
