@@ -204,3 +204,9 @@ html:not(.motion-enabled) *,html:not(.motion-enabled) *:before,html:not(.motion-
 @media(max-width:800px){.hero-playback{top:17px;left:17px;padding-inline:11px;gap:10px}.hero-playback .hero-film-bars{display:none}.hero-playback .motion-toggle{min-height:34px;font-size:12px;gap:6px}.hero-playback .motion-icon{font-size:15px}.contact{padding-bottom:30px}.footer{padding-bottom:88px}.footer-inner{grid-template-columns:1fr auto;grid-template-areas:'brand top' 'phone phone';gap:23px 18px;padding-block:25px 0}.footer .wordmark{grid-area:brand}.footer .wordmark strong{font-size:36px}.footer .wordmark>span{font-size:11px}.footer .footer-phone{grid-area:phone;font-size:16px}.footer .back-top{grid-area:top;font-size:13px;gap:9px}.back-top span{width:37px;height:37px}}
 @media(max-width:350px){.hero-playback{left:14px}.hero-playback .motion-toggle{font-size:11px}.footer-inner{gap:22px 12px}.footer .wordmark strong{font-size:32px}.footer .back-top{gap:7px}.back-top span{width:32px;height:32px}}
 @media(max-width:600px){.hero-playback{padding:0}.hero-playback .motion-toggle{min-width:44px;min-height:44px;justify-content:center}.hero-playback .motion-label{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
+
+/* Draw arrows consistently instead of relying on a device's text/emoji font. */
+.icon-arrow{display:inline-block;width:1em;height:1em;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-.125em;pointer-events:none}
+.button>span,.photo-link>span,.service-card a>span,.back-top>span{display:grid;place-items:center;flex:none;line-height:0}
+.button>span>.icon-arrow,.photo-link>span>.icon-arrow,.service-card a>span>.icon-arrow,.back-top>span>.icon-arrow,.reel-buttons .icon-arrow{display:block}
+.mobile-contact>a:last-child{flex-direction:row;gap:.4em}
