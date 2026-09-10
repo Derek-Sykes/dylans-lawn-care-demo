@@ -204,8 +204,10 @@ function Invoke-PrivateProcess([string]$Program, [string[]]$Arguments, [string]$
   $info.EnvironmentVariables['GCM_TRACE_SECRETS'] = '0'
   $process = New-Object Diagnostics.Process
   $process.StartInfo = $info
+  $started = $false
   try {
     $null = $process.Start()
+    $started = $true
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
     if ($InputText) {
@@ -218,7 +220,13 @@ function Invoke-PrivateProcess([string]$Program, [string[]]$Arguments, [string]$
     $result = @{ Code = $process.ExitCode; Text = $stdout.GetAwaiter().GetResult() }
     $null = $stderr.GetAwaiter().GetResult()
     return $result
-  } finally { $process.Dispose() }
+  } finally {
+    if ($started -and -not $process.HasExited) {
+      try { $process.Kill($true) } catch { $process.Kill() }
+      $process.WaitForExit()
+    }
+    $process.Dispose()
+  }
 }
 function Ensure-GoogleConfig {
   $arguments = (Get-Compose) + @('exec','-T','booking','booking','google-config')

@@ -24,13 +24,18 @@ Validation date: September 10, 2026. These checks concern the local booking exte
 
 - The application configuration file is provisioned in the separate private repository. The public source contains no client secret, personal Google token or local runtime state.
 - The revised PowerShell 5.1 `check` completed successfully: static packaging, race-enabled Go tests and isolated HTTP integration. Normal Docker progress and cleanup messages no longer produce a false failure in Windows PowerShell.
-- All 21 targeted setup checks passed across PowerShell 7, Windows PowerShell 5.1 and Git Bash. Each shell checks missing, oversized, malformed and mismatched files, unexpected Git URL rewrites, successful private import and cleanup, and reuse when private Git access is unavailable. These tests use synthetic credentials.
+- All 24 targeted setup checks passed across PowerShell 7, Windows PowerShell 5.1 and Git Bash. Each shell checks unavailable repositories, missing, oversized, malformed and mismatched files, unexpected Git URL rewrites, successful private import and cleanup, and reuse when private Git access is unavailable. These tests use synthetic credentials.
 - Sanitized Git authentication to the actual private repository succeeded in all three shells, using the existing host Git credentials.
 - Backend tests verify both supported Google JSON formats, exact client matching, bounded input, encrypted persistence, preservation of existing configuration and owner data, and concurrent imports.
 - Windows fixes cover long checkout paths, UTF-8 input, executable discovery, Git Bash path conversion and private-directory permissions.
+- All 11 full launcher regression groups passed, including separate installations and port collisions, safe setup failures, automatic imports, preserved data with the private Git source unavailable, shared PowerShell/Bash state, development mounts, safe updates and unsafe-update refusals.
+- A fresh public GitHub clone of `7dcb35ed7e1d24436820982c0bb59378ff974cfd` started through Git Bash, retrieved the actual private application configuration with existing Git authentication, and exposed separate available public/admin ports. The owner session reported no manual configuration requirement and generated a valid Google connection URL. Repeating start and update with private-repository access deliberately unavailable preserved the configuration and owner session.
+- [GitHub Actions run 34532597367](https://github.com/Derek-Sykes/dylans-lawn-care-demo/actions/runs/34532597367) passed for `7dcb35ed7e1d24436820982c0bb59378ff974cfd`. The server publication/deployment job was skipped.
+- Simulated interruption checks in PowerShell 7 and Windows PowerShell 5.1 verified unfinished child-process cleanup.
+
 ## Data and operating boundaries
 
-Google tokens, imported configuration, sessions, customer records and the encryption key are local runtime data. They are excluded from Git and both image build contexts. The public repository contains only the OAuth client identifier.
+Personal Google tokens, sessions, customer records and the encryption key stay in local runtime storage. Runtime copies, including imported application configuration, are excluded from the public repository and both image build contexts. Shared application configuration is supplied through the separate private repository; the public repository contains only the OAuth client identifier.
 
 This version schedules estimate/callback conversations. It has no customer accounts, payments, travel-time optimization or automatic service-duration calculation. It sends no customer emails or Calendar invitations. Primary and app-created calendars are checked; other secondary calendars are outside the first version.
 
