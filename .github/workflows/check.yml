@@ -20,6 +20,10 @@ jobs:
       - name: Build and verify the packaged website
         shell: pwsh
         run: ./website.ps1 check -NoOpen
+      - name: Check customer booking and owner Calendar refresh
+        run: |
+          node scripts/test-public-booking.cjs
+          node scripts/test-admin-refresh.cjs
       - name: Check manual dev deployment recovery
         run: python3 scripts/test-dev-deploy.py
   release:

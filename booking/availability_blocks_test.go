@@ -25,6 +25,7 @@ func TestBlockedWeeklyAndDatesSubtractFromWorkingWindows(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := defaultSettings()
+			v.SlotMinutes = 30
 			v.Weekly = []WeeklyPeriod{{1, "09:00", "12:00"}, {1, "13:00", "17:00"}, {2, "09:00", "10:00"}}
 			v.BlockedWeekly = tc.weekly
 			v.BlockedDates = tc.dates
@@ -54,6 +55,7 @@ func TestBlockedTimeOverridesCustomDateHoursAndProtectsBuffer(t *testing.T) {
 		want       int
 	}{{"09:40", "09:45", 0}, {"09:45", "10:00", 1}, {"08:55", "09:00", 1}} {
 		v := defaultSettings()
+		v.SlotMinutes = 30
 		v.Exceptions = []DateException{{Date: "2026-09-14", Start: "09:00", End: "10:00"}}
 		v.BlockedDates = []BlockedDatePeriod{{Date: "2026-09-14", Start: tc.start, End: tc.end}}
 		slots, err := scheduledSlots(v, "2026-09-14", instant("2026-09-10T12:00:00Z"))
@@ -68,6 +70,7 @@ func TestBlockedTimeOverridesCustomDateHoursAndProtectsBuffer(t *testing.T) {
 		t.Fatal("custom date hours overrode a whole-day block")
 	}
 	v = defaultSettings()
+	v.SlotMinutes = 30
 	v.Weekly = []WeeklyPeriod{{0, "23:00", "23:59"}}
 	v.BufferMinutes = 60
 	v.BlockedDates = []BlockedDatePeriod{{Date: "2026-09-14", AllDay: true}}
@@ -87,6 +90,7 @@ func TestBlockedTimesAcrossDST(t *testing.T) {
 		want      int
 	}{{"2026-03-08", "2026-03-01T12:00:00Z", 3}, {"2026-11-01", "2026-10-01T12:00:00Z", 2}} {
 		v := defaultSettings()
+		v.SlotMinutes = 30
 		v.BufferMinutes = 0
 		v.MinNoticeHours = 0
 		v.HorizonDays = 90
@@ -191,6 +195,7 @@ func TestBlockedSettingsValidationAndLegacyPersistence(t *testing.T) {
 func TestBlockedSlotsCannotBeBookedAndGoogleStillWins(t *testing.T) {
 	a, f := testApp(t)
 	v := defaultSettings()
+	v.SlotMinutes = 30
 	v.BlockedWeekly = []BlockedWeeklyPeriod{{Weekday: 1, Start: "09:00", End: "09:45"}}
 	if _, err := a.saveSettings(v); err != nil {
 		t.Fatal(err)

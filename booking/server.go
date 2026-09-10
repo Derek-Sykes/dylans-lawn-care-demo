@@ -200,10 +200,10 @@ func (a *App) publicHandler() http.Handler {
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"businessName": v.BusinessName, "timeZone": v.TimeZone, "slotMinutes": v.SlotMinutes, "bufferMinutes": v.BufferMinutes, "minNoticeHours": v.MinNoticeHours, "horizonDays": v.HorizonDays, "services": services, "bookingEnabled": a.calendar.Connected()})
+		writeJSON(w, 200, map[string]any{"businessName": v.BusinessName, "timeZone": v.TimeZone, "slotMinutes": v.SlotMinutes, "estimateMinutes": v.EstimateMinutes, "bufferMinutes": v.BufferMinutes, "minNoticeHours": v.MinNoticeHours, "horizonDays": v.HorizonDays, "services": services, "bookingEnabled": a.calendar.Connected()})
 	})
 	mux.HandleFunc("GET /api/public/slots", func(w http.ResponseWriter, r *http.Request) {
-		slots, v, err := a.availableSlots(r.Context(), r.URL.Query().Get("date"))
+		slots, v, err := a.availableSlots(r.Context(), r.URL.Query().Get("date"), r.URL.Query().Get("kind"))
 		if err != nil {
 			writeError(w, err)
 			return
@@ -224,11 +224,14 @@ func (a *App) publicHandler() http.Handler {
 		if created {
 			status = 202
 		}
-		message := "Your request was received. Dylan will follow up to discuss your property."
+		message := "Your service appointment request was received. Dylan will follow up about the job details."
 		if b.CalendarStatus != "synced" {
-			message = "Your request was saved. Calendar synchronization is pending; Dylan will follow up."
+			message = "Your service appointment request was saved. Its calendar update is not yet complete; Dylan will follow up about the job details."
 		}
-		writeJSON(w, status, map[string]any{"id": b.ID, "status": b.Status, "calendarStatus": b.CalendarStatus, "start": b.Start, "end": b.End, "message": message})
+		if b.Kind == "estimate" {
+			message = "Your estimate or callback request was saved. Check its request and calendar status for confirmation."
+		}
+		writeJSON(w, status, map[string]any{"id": b.ID, "kind": b.Kind, "status": b.Status, "calendarStatus": b.CalendarStatus, "start": b.Start, "end": b.End, "message": message})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &apiError{404, "not_found", "Page not found."})
@@ -277,11 +280,27 @@ func (a *App) adminHandler() http.Handler {
 			writeError(w, &apiError{400, "invalid_status", "Choose a valid booking filter."})
 			return
 		}
+		calendarSyncError := ""
+		if err := a.refreshCalendar(r.Context(), true); err != nil {
+			calendarSyncError = calendarRefreshMessage
+		}
 		query := "SELECT " + bookingColumns + " FROM bookings"
 		args := []any{}
+		conditions := []string{}
 		if status != "" {
-			query += " WHERE status=?"
+			conditions = append(conditions, "status=?")
 			args = append(args, status)
+		}
+		if kind := r.URL.Query().Get("kind"); kind != "" {
+			if _, err := bookingKind(kind); err != nil {
+				writeError(w, err)
+				return
+			}
+			conditions = append(conditions, "kind=?")
+			args = append(args, kind)
+		}
+		if len(conditions) > 0 {
+			query += " WHERE " + strings.Join(conditions, " AND ")
 		}
 		query += " ORDER BY created_at DESC"
 		rows, err := a.store.db.Query(query, args...)
@@ -303,7 +322,7 @@ func (a *App) adminHandler() http.Handler {
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"bookings": bookings})
+		writeJSON(w, 200, map[string]any{"bookings": bookings, "calendarSyncError": calendarSyncError})
 	})
 	mux.HandleFunc("PATCH /api/admin/bookings/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -378,7 +397,7 @@ func (a *App) saveSettings(v Settings) (Settings, error) {
 	defer a.bookingMu.Unlock()
 	// Older clients omit these arrays. Preserve any existing blocks; an explicit
 	// empty array is the supported way to remove them.
-	if v.BlockedWeekly == nil || v.BlockedDates == nil {
+	if v.BlockedWeekly == nil || v.BlockedDates == nil || v.EstimateMinutes == 0 {
 		previous, err := a.store.settings()
 		if err != nil {
 			return v, err
@@ -388,6 +407,9 @@ func (a *App) saveSettings(v Settings) (Settings, error) {
 		}
 		if v.BlockedDates == nil {
 			v.BlockedDates = previous.BlockedDates
+		}
+		if v.EstimateMinutes == 0 {
+			v.EstimateMinutes = previous.EstimateMinutes
 		}
 	}
 	v.BusinessName = strings.TrimSpace(v.BusinessName)

@@ -14,6 +14,7 @@ func instant(v string) time.Time {
 }
 func TestAvailabilityDSTAndExceptions(t *testing.T) {
 	v := defaultSettings()
+	v.SlotMinutes = 30
 	v.MinNoticeHours = 0
 	v.BufferMinutes = 0
 	v.HorizonDays = 90
@@ -127,11 +128,11 @@ func TestDefaultNormalWeekdaysOfferSlots(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(slots) != 11 {
-			t.Fatalf("normal weekday %s: got %d slots, want 11", date, len(slots))
+		if len(slots) != 6 {
+			t.Fatalf("normal weekday %s: got %d slots, want 6", date, len(slots))
 		}
-		if !slots[0].Start.Equal(instant(date+"T13:00:00Z")) || !slots[len(slots)-1].End.Equal(instant(date+"T21:00:00Z")) {
-			t.Fatalf("normal weekday %s: slots do not span 09:00–17:00 New York", date)
+		if !slots[0].Start.Equal(instant(date+"T13:00:00Z")) || !slots[len(slots)-1].End.Equal(instant(date+"T20:15:00Z")) {
+			t.Fatalf("normal weekday %s: hour-long appointments and buffers do not fit 09:00–17:00 New York", date)
 		}
 	}
 	closed, err := scheduledSlots(v, "2026-09-16", now)

@@ -78,7 +78,7 @@ func testApp(t *testing.T) (*App, *fakeCalendar) {
 	return a, fake
 }
 func testInput(key string) BookingInput {
-	return BookingInput{ServiceID: "lawn-care", Start: "2026-09-14T13:00:00Z", Name: "Sample Customer", Email: "sample@example.com", Phone: "410-555-0123", Address: "Example property", Notes: "Estimate only", IdempotencyKey: key}
+	return BookingInput{ServiceID: "lawn-care", Start: "2026-09-14T13:00:00Z", Name: "Sample Customer", Email: "sample@example.com", Phone: "410-555-0123", Address: "Example property", Notes: "Mow the front and back lawn", IdempotencyKey: key}
 }
 
 func TestConcurrentBookingAndIdempotentRetry(t *testing.T) {

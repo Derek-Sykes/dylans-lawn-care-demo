@@ -32,6 +32,10 @@ On a fresh installation, `start` retrieves `google-client.json` from the `main` 
 
 Existing configured installations skip the private fetch entirely, including during updates. GitHub credentials stay with Git on the host; personal Google tokens and customer data never enter either GitHub repository. The public desktop client ID in this source is not a secret. An account's ability to clone this public website does not grant access to the private configuration repository. If private configuration is missing or access is denied, startup reports the problem before opening the admin portal rather than claiming Google setup succeeded.
 
+Customers use **Book an appointment** in the navigation or homepage to choose a service, date and time for work at their property. Name, phone, email and property address are required; job notes are optional. New installations start with a **60-minute default appointment length**, adjustable under **Availability** in the owner portal. Changing the default affects new bookings and preserves existing appointment lengths and saved installation settings. **Request an estimate** opens a separate callback flow: it defaults to a 15-minute Calendar slot, also adjustable by the owner. The owner portal keeps **Appointments** and **Estimates & callbacks** in separate views; both retain contact details and follow-up status.
+
+Changing a booking’s start or end in its dedicated Google Calendar updates the portal and public availability. The owner view refreshes about once a minute while visible, or immediately with **Refresh**. Edits preserve the individual appointment duration, buffer and follow-up status; a Calendar deletion cancels the matching request.
+
 The owner sets regular working days and hours, date exceptions, and optional time off for recurring breaks or specific dates. Available appointments are working hours minus time off, existing reservations and Google Calendar conflicts. Saved requests include contact and property details, private follow-up notes, and separate customer-follow-up and Calendar-sync statuses. See [validation results](docs/BOOKING_VALIDATION.md).
 
 | Task | PowerShell | Bash |

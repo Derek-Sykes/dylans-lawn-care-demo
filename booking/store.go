@@ -137,6 +137,34 @@ CREATE INDEX IF NOT EXISTS booking_jobs ON bookings(calendar_status,next_attempt
 CREATE TRIGGER IF NOT EXISTS prevent_booking_overlap BEFORE INSERT ON bookings
 WHEN EXISTS(SELECT 1 FROM bookings b WHERE (b.status!='cancelled' OR b.calendar_status!='synced') AND NEW.start<b.blocked_end AND NEW.blocked_end>b.start)
 BEGIN SELECT RAISE(ABORT,'booking_overlap'); END;`)
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.Query("PRAGMA table_info(bookings)")
+	if err != nil {
+		return err
+	}
+	hasKind := false
+	for rows.Next() {
+		var id, required, primary int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err = rows.Scan(&id, &name, &columnType, &required, &defaultValue, &primary); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "kind" {
+			hasKind = true
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if !hasKind {
+		_, err = s.db.Exec("ALTER TABLE bookings ADD COLUMN kind TEXT NOT NULL DEFAULT 'service' CHECK(kind IN ('service','estimate'))")
+	}
 	return err
 }
 

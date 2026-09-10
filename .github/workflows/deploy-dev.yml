@@ -24,6 +24,10 @@ jobs:
       - name: Check the application
         shell: pwsh
         run: ./website.ps1 check -NoOpen
+      - name: Check customer booking and owner Calendar refresh
+        run: |
+          node scripts/test-public-booking.cjs
+          node scripts/test-admin-refresh.cjs
       - name: Check deployment recovery
         run: python3 scripts/test-dev-deploy.py
 

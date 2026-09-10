@@ -6,8 +6,10 @@
   const oauthOutcome = new URLSearchParams(window.location.search).get('google');
   if (oauthOutcome) { const url = new URL(window.location.href); url.searchParams.delete('google'); history.replaceState(null, '', url.pathname + url.search); }
   const $ = selector => document.querySelector(selector);
-  const state = { session: null, sessionEpoch: 0, sessionRequest: 0, refreshingSession: false, csrf: '', settings: null, bookings: [], activePanel: 'bookings', selectedId: null, dirty: false, saving: false, loadingBookings: false, connecting: false, configuring: false, disconnecting: false, replacingConfiguration: false, poll: null };
-  const statusNames = { needs_followup: 'Needs follow-up', contacted: 'Contacted', confirmed: 'Confirmed', cancelled: 'Cancelled' };
+  const state = { session: null, sessionEpoch: 0, sessionRequest: 0, refreshingSession: false, csrf: '', settings: null, bookings: [], bookingRevision: 0, activePanel: 'bookings', selectedId: null, dirty: false, saving: false, loadingBookings: false, connecting: false, configuring: false, disconnecting: false, replacingConfiguration: false, poll: null };
+  state.activeKind = 'service';
+  const statusNames = { needs_followup: 'Needs contact', contacted: 'Contacted', confirmed: 'Confirmed', cancelled: 'Cancelled' };
+  const kindOf = booking => booking.kind === 'estimate' ? 'estimate' : 'service';
   const services = { 'lawn-care': 'Lawn care', landscaping: 'Landscaping', 'snow-ice': 'Snow & ice' };
   const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const dialog = $('#booking-dialog');
@@ -104,20 +106,23 @@
     $('#google-configuration-form').reset(); $('#google-configuration-file').value = ''; $('#google-configuration').hidden = true;
     $('#import-google-configuration').disabled = true; $('#import-google-configuration .button-label').textContent = 'Import configuration';
     $('#logout').disabled = false; $('#signin-google').disabled = false; $('#disconnect-google').disabled = false; $('#refresh-bookings').disabled = false;
-    $('#settings-state').textContent = ''; $('#request-count').textContent = '0';
+    $('#settings-state').textContent = ''; $('#request-count').textContent = '0'; $('#estimate-count').textContent = '0';
     ['#stat-followup', '#stat-confirmed', '#stat-calendar'].forEach(selector => { $(selector).textContent = '—'; });
-    ['#booking-detail-message', '#bookings-message', '#settings-message', '#calendar-message', '#configuration-message', '#page-message'].forEach(selector => message(selector, ''));
+    ['#booking-detail-message', '#calendar-refresh-message', '#bookings-message', '#settings-message', '#calendar-message', '#configuration-message', '#page-message'].forEach(selector => message(selector, ''));
     $('#portal').hidden = true; $('#logout').hidden = true; $('#loading-view').hidden = true; $('#signin-view').hidden = false;
     const signInAvailable = Boolean(state.session?.google?.configured && !state.session?.setupRequired);
     $('#signin-google').hidden = !signInAvailable;
     $('#signin-copy').textContent = signInAvailable ? 'Sign in with the Google account already connected to this portal.' : 'Open this installation\'s private setup link to sign in securely. Your access stays private to this installation.';
   }
-  function switchPanel(panel, focus = false) {
+  function switchPanel(panel, focus = false, kind = state.activeKind) {
     state.activePanel = panel;
+    if (panel === 'bookings') state.activeKind = kind === 'estimate' ? 'estimate' : 'service';
     document.querySelectorAll('.workspace-panel').forEach(element => { element.hidden = element.id !== `${panel}-panel`; });
-    document.querySelectorAll('[data-panel]').forEach(button => { const selected = button.dataset.panel === panel; button.classList.toggle('active', selected); if (selected) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
+    document.querySelectorAll('[data-panel]').forEach(button => { const selected = button.dataset.panel === panel && (panel !== 'bookings' || button.dataset.kind === state.activeKind); button.classList.toggle('active', selected); if (selected) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
+    renderBookings();
     if (focus) $(`#${panel}-heading`).focus();
     if (panel === 'calendar') refreshSession();
+    if (panel === 'bookings') loadBookings(true);
   }
   function formatDate(value, timeOnly = false) {
     const date = new Date(value);
@@ -126,41 +131,63 @@
     try { return new Intl.DateTimeFormat('en-US', { ...options, timeZone: state.settings?.timeZone || 'America/New_York', timeZoneName: 'short' }).format(date); }
     catch { return new Intl.DateTimeFormat('en-US', options).format(date); }
   }
+  function appointmentDuration(booking) {
+    const minutes = Math.round((Date.parse(booking.end) - Date.parse(booking.start)) / 60000);
+    if (!Number.isFinite(minutes) || minutes <= 0) return 'Duration unavailable';
+    const hours = Math.floor(minutes / 60); const remaining = minutes % 60;
+    return [hours ? `${hours} ${hours === 1 ? 'hour' : 'hours'}` : '', remaining ? `${remaining} ${remaining === 1 ? 'minute' : 'minutes'}` : ''].filter(Boolean).join(' ');
+  }
+  function appointmentEnd(booking) {
+    try {
+      const day = new Intl.DateTimeFormat('en-US', { timeZone: state.settings?.timeZone || 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric' });
+      return formatDate(booking.end, day.format(new Date(booking.start)) === day.format(new Date(booking.end)));
+    } catch { return formatDate(booking.end); }
+  }
   function syncText(booking) {
     if (booking.status === 'cancelled') return booking.calendarStatus === 'synced' ? 'Calendar removal complete' : booking.calendarStatus === 'failed' ? 'Calendar removal failed' : 'Calendar removal pending';
     return booking.calendarStatus === 'synced' ? 'On Google Calendar' : booking.calendarStatus === 'failed' ? 'Calendar update failed' : 'Calendar update pending';
   }
   function badge(text, kind = '') { return node('span', `badge ${kind}`, text); }
   function renderBookings() {
-    const all = state.bookings;
+    const all = state.bookings.filter(item => kindOf(item) === state.activeKind);
+    $('#bookings-heading').replaceChildren(document.createTextNode(state.activeKind === 'estimate' ? 'Estimates & callbacks' : 'Appointments'), node('span', '', '.'));
+    $('#bookings-intro').textContent = state.activeKind === 'estimate' ? 'Estimate and callback conversations, with the property details and contact progress together.' : 'Lawn, landscape and snow jobs, with their scheduled times and details.';
     $('#stat-followup').textContent = all.filter(item => item.status === 'needs_followup').length;
     $('#stat-confirmed').textContent = all.filter(item => item.status === 'confirmed').length;
     $('#stat-calendar').textContent = all.filter(item => item.calendarStatus !== 'synced').length;
-    $('#request-count').textContent = all.filter(item => item.status === 'needs_followup').length;
+    $('#request-count').textContent = state.bookings.filter(item => kindOf(item) === 'service' && item.status !== 'cancelled').length;
+    $('#estimate-count').textContent = state.bookings.filter(item => kindOf(item) === 'estimate' && item.status !== 'cancelled').length;
     const filter = $('#booking-filter').value; const query = $('#booking-search').value.trim().toLocaleLowerCase();
     const filtered = all.filter(item => (filter === 'all' || item.status === filter) && (!query || [item.name, item.email, item.phone].some(value => String(value || '').toLocaleLowerCase().includes(query)))).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     const fragment = document.createDocumentFragment();
-    if (!filtered.length) fragment.append(node('p', 'empty-state', all.length ? 'No requests match these filters.' : 'No requests yet. New estimate and callback appointments will appear here.'));
+    if (!filtered.length) fragment.append(node('p', 'empty-state', all.length ? 'No requests match these filters.' : state.activeKind === 'estimate' ? 'No estimates or callbacks yet. New requests will appear here.' : 'No service appointments yet. New job requests will appear here.'));
     filtered.forEach(booking => {
       const row = node('article', 'request-row'); const details = node('div');
-      details.append(node('h3', '', booking.name || 'Customer request'), node('p', '', services[booking.serviceId] || 'Project conversation'));
+      details.append(node('h3', '', booking.name || 'Customer request'), node('p', '', services[booking.serviceId] || 'Service appointment'));
       const badges = node('div', 'request-meta'); badges.append(badge(statusNames[booking.status] || booking.status, booking.status === 'confirmed' ? 'success' : booking.status === 'needs_followup' ? 'warning' : 'neutral'), badge(syncText(booking), booking.calendarStatus === 'failed' ? 'danger' : booking.calendarStatus === 'synced' ? 'success' : 'warning')); details.append(badges);
-      const when = node('div', 'request-time'); when.append(node('p', '', formatDate(booking.start)), node('p', '', booking.phone || booking.email || ''));
+      const when = node('div', 'request-time'); when.append(node('p', '', formatDate(booking.start)), node('p', '', `Until ${appointmentEnd(booking)} · ${appointmentDuration(booking)}`), node('p', '', booking.phone || booking.email || ''));
       const open = node('button', 'button button-secondary', 'View'); open.type = 'button'; open.setAttribute('aria-label', `View request from ${booking.name || 'customer'}`); open.addEventListener('click', () => openBooking(booking.id));
       row.append(details, when, open); fragment.append(row);
     });
     $('#booking-list').replaceChildren(fragment);
   }
-  async function loadBookings(silent = false) {
-    if (state.loadingBookings || !state.session?.authenticated) return false;
-    const epoch = state.sessionEpoch;
+  async function loadBookings(silent = false, mutationRefresh = false) {
+    if (state.loadingBookings || (state.saving && !mutationRefresh) || !state.session?.authenticated) return false;
+    const epoch = state.sessionEpoch; const revision = state.bookingRevision;
     state.loadingBookings = true; $('#refresh-bookings').disabled = true;
     if (!silent) message('#bookings-message', 'Loading requests…');
     try {
       const data = await api('/api/admin/bookings');
-      if (epoch !== state.sessionEpoch || !state.session?.authenticated) return false;
+      if (epoch !== state.sessionEpoch || revision !== state.bookingRevision || (state.saving && !mutationRefresh) || !state.session?.authenticated) return false;
       if (!Array.isArray(data?.bookings)) throw new APIError('The request list could not be read. Please refresh.');
-      state.bookings = data.bookings; renderBookings(); message('#bookings-message', ''); return true;
+      const previous = state.bookings.find(booking => booking.id === state.selectedId);
+      state.bookings = data.bookings;
+      if (!silent || !$('#booking-list').contains(document.activeElement)) renderBookings();
+      const selected = state.bookings.find(booking => booking.id === state.selectedId);
+      if (dialog.open && selected) renderDetail(selected, previous);
+      message('#bookings-message', data.calendarSyncError ? 'Google Calendar changes could not be checked. These are the last saved appointment times. Refresh again before relying on the schedule.' : '', data.calendarSyncError ? 'error' : '');
+      message('#calendar-refresh-message', data.calendarSyncError ? 'Google Calendar changes could not be checked. The appointment times shown are the last saved times.' : '', data.calendarSyncError ? 'error' : '');
+      return true;
     } catch (error) { if (epoch === state.sessionEpoch) message('#bookings-message', error.message, 'error'); return false; }
     finally { if (epoch === state.sessionEpoch) { state.loadingBookings = false; $('#refresh-bookings').disabled = false; } }
   }
@@ -169,18 +196,21 @@
     if (href && value) { const link = node('a', '', value); link.href = href; definition.append(link); } else definition.textContent = value || 'Not provided';
     wrapper.append(node('dt', '', label), definition); return wrapper;
   }
-  function renderDetail(booking) {
+  function renderDetail(booking, previous = null) {
+    const notesDraft = previous && $('#detail-notes').value !== (previous.adminNotes || '') ? $('#detail-notes').value : null;
+    const statusDraft = previous && $('#detail-status').value !== previous.status ? $('#detail-status').value : null;
     $('#booking-dialog-title').textContent = booking.name || 'Customer request';
-    const time = node('div', 'detail-time'); time.append(node('strong', '', formatDate(booking.start)), node('p', '', `Until ${formatDate(booking.end, true)} · ${(state.settings?.timeZone || 'America/New_York').replaceAll('_', ' ')} · ${services[booking.serviceId] || 'Project conversation'}`));
-    const sync = node('div', 'request-meta'); sync.append(badge(statusNames[booking.status] || booking.status, 'neutral'), badge(syncText(booking), booking.calendarStatus === 'failed' ? 'danger' : booking.calendarStatus === 'synced' ? 'success' : 'warning'));
-    const explanation = booking.status === 'cancelled' ? booking.calendarStatus === 'synced' ? 'This request is cancelled. To schedule again, create a new request using current availability.' : 'Cancellation is saved. This time stays reserved until removal from Google Calendar succeeds.' : booking.calendarStatus === 'synced' ? 'Calendar synchronization is complete. The follow-up status below tracks your conversation with the customer.' : 'The request is saved locally. Its time is not yet confirmed in Google Calendar.';
+    const time = node('div', 'detail-time'); time.append(node('strong', '', formatDate(booking.start)), node('p', '', `Until ${appointmentEnd(booking)} · ${appointmentDuration(booking)} · ${services[booking.serviceId] || 'Service appointment'}`));
+    const sync = node('div', 'request-meta'); sync.append(badge(kindOf(booking) === 'estimate' ? 'Estimate / callback' : 'Service appointment', 'neutral'), badge(statusNames[booking.status] || booking.status, 'neutral'), badge(syncText(booking), booking.calendarStatus === 'failed' ? 'danger' : booking.calendarStatus === 'synced' ? 'success' : 'warning'));
+    const explanation = booking.status === 'cancelled' ? booking.calendarStatus === 'synced' ? 'This request is cancelled. To schedule again, create a new request using current availability.' : 'Cancellation is saved. This time stays reserved until removal from Google Calendar succeeds.' : booking.calendarStatus === 'synced' ? kindOf(booking) === 'estimate' ? 'This time is reserved for an estimate or callback. Track whether the customer needs contact, has been contacted, or the conversation is confirmed.' : 'The service appointment is on Google Calendar. Track contact progress and confirm the job once its details are settled.' : 'The request is saved. Its Google Calendar update is not yet complete. Review the details before confirming the appointment.';
     const data = node('dl', 'detail-grid');
     const phone = String(booking.phone || '').replace(/[^\d+]/g, '');
     data.append(detailItem('Phone', booking.phone, '', phone ? `tel:${phone}` : null), detailItem('Email', booking.email, '', booking.email ? `mailto:${encodeURIComponent(booking.email)}` : null), detailItem('Property address', booking.address, 'wide'), detailItem('Customer notes', booking.notes || 'No notes supplied.', 'wide'), detailItem('Request reference', booking.id, 'wide'));
     $('#booking-detail').replaceChildren(time, sync, node('p', 'sync-description', explanation), data);
-    $('#detail-status').value = booking.status; $('#detail-status').disabled = booking.status === 'cancelled';
+    if (!previous || statusDraft === null || booking.status === 'cancelled') $('#detail-status').value = booking.status;
+    $('#detail-status').disabled = booking.status === 'cancelled';
     $('#detail-status').querySelector('option[value="confirmed"]').disabled = booking.calendarStatus !== 'synced';
-    $('#detail-notes').value = booking.adminNotes || '';
+    if (notesDraft === null && $('#detail-notes').value !== (booking.adminNotes || '')) $('#detail-notes').value = booking.adminNotes || '';
     $('#cancel-booking').hidden = booking.status === 'cancelled';
     $('#retry-booking').hidden = booking.calendarStatus === 'synced';
   }
@@ -188,16 +218,17 @@
   function lockDetail(locked) { state.saving = locked; $('#booking-update-fields').disabled = locked; ['#save-booking', '#cancel-booking', '#retry-booking'].forEach(selector => { $(selector).disabled = locked; }); }
   async function mutateBooking(method, suffix, payload, successMessage) {
     if (state.saving || !state.selectedId) return;
+    state.bookingRevision++;
     const id = state.selectedId; const epoch = state.sessionEpoch; lockDetail(true); message('#booking-detail-message', 'Saving…');
     try {
       const data = await api(`/api/admin/bookings/${encodeURIComponent(id)}${suffix}`, { method, body: payload || {} });
       if (epoch !== state.sessionEpoch || !state.session?.authenticated) return;
       const updated = data?.booking || data;
       if (updated?.id === id) { state.bookings = state.bookings.map(item => item.id === id ? updated : item); renderBookings(); if (dialog.open && state.selectedId === id) renderDetail(updated); }
-      else { const loaded = await loadBookings(true); const booking = state.bookings.find(item => item.id === id); if (loaded && dialog.open && state.selectedId === id && booking) renderDetail(booking); if (!loaded) successMessage += ' Refresh requests to check the latest calendar status.'; }
+      else { const loaded = await loadBookings(true, true); const booking = state.bookings.find(item => item.id === id); if (loaded && dialog.open && state.selectedId === id && booking) renderDetail(booking); if (!loaded) successMessage += ' Refresh requests to check the latest calendar status.'; }
       if (epoch === state.sessionEpoch && dialog.open && state.selectedId === id) message('#booking-detail-message', successMessage, 'success');
     } catch (error) { if (epoch === state.sessionEpoch) message('#booking-detail-message', error.message, 'error'); }
-    finally { if (epoch === state.sessionEpoch) { lockDetail(false); const booking = state.bookings.find(item => item.id === state.selectedId); $('#detail-status').disabled = booking?.status === 'cancelled'; } }
+    finally { if (epoch === state.sessionEpoch) { state.bookingRevision++; lockDetail(false); const booking = state.bookings.find(item => item.id === state.selectedId); $('#detail-status').disabled = booking?.status === 'cancelled'; } }
   }
   function dirty() { state.dirty = true; $('#settings-state').textContent = 'Unsaved changes'; message('#settings-message', ''); }
   function timeInput(labelText, value) { const label = node('label'); const caption = node('span', 'small muted', labelText); const input = node('input'); input.type = 'time'; input.value = value; input.required = true; label.append(caption, input); return label; }
@@ -278,7 +309,7 @@
   }
   function renderSettings(settings) {
     state.settings = { ...settings, blockedWeekly: Array.isArray(settings.blockedWeekly) ? settings.blockedWeekly : [], blockedDates: Array.isArray(settings.blockedDates) ? settings.blockedDates : [] };
-    for (const key of ['businessName', 'timeZone', 'slotMinutes', 'bufferMinutes', 'minNoticeHours', 'horizonDays']) $('#settings-form').elements.namedItem(key).value = settings[key];
+    for (const key of ['businessName', 'timeZone', 'slotMinutes', 'estimateMinutes', 'bufferMinutes', 'minNoticeHours', 'horizonDays']) $('#settings-form').elements.namedItem(key).value = settings[key];
     renderWeekly(settings.weekly || []); $('#date-exceptions').replaceChildren(); (settings.exceptions || []).forEach(appendException); $('#exceptions-empty').hidden = Boolean((settings.exceptions || []).length);
     $('#time-off-rows').replaceChildren(); state.settings.blockedWeekly.forEach(block => appendTimeOff(block, 'weekly')); state.settings.blockedDates.forEach(block => appendTimeOff(block, 'date')); updateTimeOffSummary(); $('#time-off-panel').open = $('#time-off-rows').children.length > 0;
     state.dirty = false; $('#settings-fields').disabled = false; $('#save-settings').disabled = false; $('#reset-settings').disabled = false; $('#reset-settings').textContent = 'Discard changes'; $('#settings-state').textContent = 'All changes saved'; renderBookings();
@@ -292,7 +323,7 @@
     const values = new FormData($('#settings-form')); const settings = { businessName: values.get('businessName').trim(), timeZone: values.get('timeZone').trim(), weekly: [], exceptions: [] };
     if (!settings.businessName) throw new Error('Enter your business name.');
     try { new Intl.DateTimeFormat('en-US', { timeZone: settings.timeZone }).format(); } catch { throw new Error('Enter a valid time zone, such as America/New_York.'); }
-    for (const key of ['slotMinutes', 'bufferMinutes', 'minNoticeHours', 'horizonDays']) settings[key] = Number(values.get(key));
+    for (const key of ['slotMinutes', 'estimateMinutes', 'bufferMinutes', 'minNoticeHours', 'horizonDays']) settings[key] = Number(values.get(key));
     document.querySelectorAll('.weekly-day').forEach(row => {
       if (!row.querySelector('.day-enabled').checked) return;
       const weekday = Number(row.dataset.weekday); const windows = [];
@@ -355,12 +386,18 @@
       if (!document.hidden) {
         await refreshSession();
         if (epoch !== state.sessionEpoch || !state.session?.authenticated) return;
-        if (!dialog.open && state.activePanel === 'bookings' && !$('#booking-list').contains(document.activeElement)) await loadBookings(true);
+        if (state.activePanel === 'bookings') await loadBookings(true);
       }
       if (epoch === state.sessionEpoch) schedulePoll();
-    }, 30000);
+    }, 60000);
   }
-  document.querySelectorAll('[data-panel]').forEach(button => button.addEventListener('click', () => switchPanel(button.dataset.panel, true)));
+  function refreshVisibleBookings() {
+    if (document.hidden || !state.session?.authenticated) return;
+    refreshSession();
+    if (state.activePanel === 'bookings') loadBookings(true);
+    schedulePoll();
+  }
+  document.querySelectorAll('[data-panel]').forEach(button => button.addEventListener('click', () => switchPanel(button.dataset.panel, true, button.dataset.kind)));
   $('#session-retry').addEventListener('click', start);
   $('#replace-google-configuration').addEventListener('click', () => { state.replacingConfiguration = true; message('#configuration-message', ''); renderConnection(); $('#google-configuration-file').focus(); });
   $('#cancel-configuration').addEventListener('click', () => { state.replacingConfiguration = false; $('#google-configuration-file').value = ''; message('#configuration-message', ''); renderConnection(); $('#replace-google-configuration').focus(); });
@@ -444,5 +481,7 @@
   window.addEventListener('beforeunload', event => { if (state.dirty && state.session?.authenticated) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', showSignedOut);
   window.addEventListener('pageshow', event => { if (event.persisted) { showSignedOut(); start(); } });
+  window.addEventListener('focus', refreshVisibleBookings);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(state.poll); else refreshVisibleBookings(); });
   start();
 })();

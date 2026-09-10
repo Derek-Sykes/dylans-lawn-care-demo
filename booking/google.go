@@ -65,12 +65,14 @@ type Calendar interface {
 	Sync(context.Context, Booking) error
 }
 type Google struct {
-	cfg    Config
-	store  *Store
-	client *http.Client
-	now    func() time.Time
-	mu     sync.Mutex
-	ops    sync.RWMutex
+	cfg            Config
+	store          *Store
+	client         *http.Client
+	now            func() time.Time
+	mu             sync.Mutex
+	ops            sync.RWMutex
+	lastRefresh    time.Time
+	lastRefreshErr error
 }
 
 func (g *Google) owner() (Owner, error) {
@@ -82,6 +84,9 @@ func (g *Google) connection() Connection {
 	var v GoogleTokens
 	var message string
 	_ = g.store.getJSON("google_error", &message)
+	if message == "" {
+		_ = g.store.getJSON("calendar_refresh_error", &message)
+	}
 	if err := g.store.getSecret("google_tokens", &v); err != nil || v.Refresh == "" {
 		return Connection{Error: message}
 	}
@@ -388,13 +393,17 @@ func (g *Google) busy(ctx context.Context, start, end time.Time) ([]Busy, error)
 }
 
 type googleEvent struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Start  struct {
+	ID               string   `json:"id"`
+	Status           string   `json:"status"`
+	Recurrence       []string `json:"recurrence"`
+	RecurringEventID string   `json:"recurringEventId"`
+	Start            struct {
 		DateTime string `json:"dateTime"`
+		Date     string `json:"date"`
 	} `json:"start"`
 	End struct {
 		DateTime string `json:"dateTime"`
+		Date     string `json:"date"`
 	} `json:"end"`
 	Extended struct {
 		Private map[string]string `json:"private"`
@@ -428,7 +437,24 @@ func (g *Google) Sync(ctx context.Context, b Booking) error {
 		if g.matchesEvent(existing, b) {
 			return nil
 		}
-		return errors.New("calendar appointment changed; review needed")
+		// A lost insert response may be followed by an owner changing the event
+		// before this retry. Import its times instead of recreating or reverting it.
+		if existing.ID != b.EventID {
+			return errGoogle
+		}
+		zone := ""
+		if existing.Status != "cancelled" && existing.Start.Date != "" {
+			// An all-day event is defined in its Google calendar's timezone, which
+			// the owner may have changed independently from the website settings.
+			var metadata struct {
+				TimeZone string `json:"timeZone"`
+			}
+			if _, err = g.request(ctx, "GET", "/calendars/"+url.PathEscape(owner.CalendarID)+"?fields=timeZone", nil, &metadata); err != nil || metadata.TimeZone == "" {
+				return errGoogle
+			}
+			zone = metadata.TimeZone
+		}
+		return g.store.applyCalendarSnapshot(ctx, []googleEvent{existing}, calendarCursor{TimeZone: zone}, false)
 	}
 	if status != 404 {
 		return errGoogle
@@ -444,7 +470,14 @@ func (g *Google) Sync(ctx context.Context, b Booking) error {
 	if conflicts(Slot{b.Start, b.End}, int(buffer/time.Minute), busy) {
 		return errConflict
 	}
-	event := map[string]any{"id": b.EventID, "summary": "Estimate / callback · " + serviceName(b.ServiceID) + " · " + b.Name, "description": fmt.Sprintf("Website appointment request. Confirm scope and service area with the customer.\nName: %s\nPhone: %s\nEmail: %s\nAddress: %s\nRequest: %s", b.Name, b.Phone, b.Email, b.Address, b.Notes), "location": b.Address, "visibility": "private", "start": map[string]string{"dateTime": b.Start.Format(time.RFC3339)}, "end": map[string]string{"dateTime": b.End.Format(time.RFC3339)}, "extendedProperties": map[string]any{"private": map[string]string{"booking_id": b.ID, "installation_id": g.store.installID}}}
+	title := "Service appointment"
+	description := "Website service appointment request. Review the requested job and confirm service coverage and job details with the customer."
+	if b.Kind == "estimate" {
+		title = "Estimate / callback"
+		description = "Website estimate / callback request. This time is for discussing the project and an estimate, not performing the service job."
+	}
+	description += fmt.Sprintf("\nService: %s\nName: %s\nPhone: %s\nEmail: %s\nProperty address: %s\nJob notes: %s", serviceName(b.ServiceID), b.Name, b.Phone, b.Email, b.Address, b.Notes)
+	event := map[string]any{"id": b.EventID, "summary": title + " · " + serviceName(b.ServiceID) + " · " + b.Name, "description": description, "location": b.Address, "visibility": "private", "start": map[string]string{"dateTime": b.Start.Format(time.RFC3339)}, "end": map[string]string{"dateTime": b.End.Format(time.RFC3339)}, "extendedProperties": map[string]any{"private": map[string]string{"booking_id": b.ID, "installation_id": g.store.installID}}}
 	status, err = g.request(ctx, "POST", calendarPath+"?sendUpdates=none", event, &existing)
 	if status == 409 {
 		_, err = g.request(ctx, "GET", path, nil, &existing)

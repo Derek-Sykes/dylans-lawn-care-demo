@@ -32,16 +32,17 @@ type BlockedDatePeriod struct {
 	End    string `json:"end,omitempty"`
 }
 type Settings struct {
-	BusinessName   string                `json:"businessName"`
-	TimeZone       string                `json:"timeZone"`
-	SlotMinutes    int                   `json:"slotMinutes"`
-	BufferMinutes  int                   `json:"bufferMinutes"`
-	MinNoticeHours int                   `json:"minNoticeHours"`
-	HorizonDays    int                   `json:"horizonDays"`
-	Weekly         []WeeklyPeriod        `json:"weekly"`
-	Exceptions     []DateException       `json:"exceptions"`
-	BlockedWeekly  []BlockedWeeklyPeriod `json:"blockedWeekly"`
-	BlockedDates   []BlockedDatePeriod   `json:"blockedDates"`
+	BusinessName    string                `json:"businessName"`
+	TimeZone        string                `json:"timeZone"`
+	SlotMinutes     int                   `json:"slotMinutes"`
+	EstimateMinutes int                   `json:"estimateMinutes"`
+	BufferMinutes   int                   `json:"bufferMinutes"`
+	MinNoticeHours  int                   `json:"minNoticeHours"`
+	HorizonDays     int                   `json:"horizonDays"`
+	Weekly          []WeeklyPeriod        `json:"weekly"`
+	Exceptions      []DateException       `json:"exceptions"`
+	BlockedWeekly   []BlockedWeeklyPeriod `json:"blockedWeekly"`
+	BlockedDates    []BlockedDatePeriod   `json:"blockedDates"`
 }
 type Slot struct {
 	Start time.Time `json:"start"`
@@ -53,7 +54,7 @@ type Busy struct {
 }
 
 func defaultSettings() Settings {
-	v := Settings{BusinessName: "Dylan’s Lawn Care", TimeZone: "America/New_York", SlotMinutes: 30, BufferMinutes: 15, MinNoticeHours: 24, HorizonDays: 30, Weekly: []WeeklyPeriod{}, Exceptions: []DateException{}, BlockedWeekly: []BlockedWeeklyPeriod{}, BlockedDates: []BlockedDatePeriod{}}
+	v := Settings{BusinessName: "Dylan’s Lawn Care", TimeZone: "America/New_York", SlotMinutes: 60, EstimateMinutes: 15, BufferMinutes: 15, MinNoticeHours: 24, HorizonDays: 30, Weekly: []WeeklyPeriod{}, Exceptions: []DateException{}, BlockedWeekly: []BlockedWeeklyPeriod{}, BlockedDates: []BlockedDatePeriod{}}
 	for d := 1; d <= 5; d++ {
 		v.Weekly = append(v.Weekly, WeeklyPeriod{d, "09:00", "17:00"})
 	}
@@ -79,7 +80,7 @@ func validateSettings(v Settings) error {
 	if _, e := time.LoadLocation(v.TimeZone); e != nil {
 		return errors.New("choose a valid IANA time zone")
 	}
-	if v.SlotMinutes < 15 || v.SlotMinutes > 240 || v.BufferMinutes < 0 || v.BufferMinutes > 120 || v.MinNoticeHours < 0 || v.MinNoticeHours > 720 || v.HorizonDays < 1 || v.HorizonDays > 90 {
+	if v.SlotMinutes < 15 || v.SlotMinutes > 240 || v.EstimateMinutes < 15 || v.EstimateMinutes > 120 || v.BufferMinutes < 0 || v.BufferMinutes > 120 || v.MinNoticeHours < 0 || v.MinNoticeHours > 720 || v.HorizonDays < 1 || v.HorizonDays > 90 {
 		return errors.New("appointment, buffer, notice or booking horizon is outside its allowed range")
 	}
 	if len(v.Weekly) > 35 || len(v.Exceptions) > 365 || len(v.BlockedWeekly) > 70 || len(v.BlockedDates) > 365 {
@@ -151,6 +152,9 @@ func validateSettings(v Settings) error {
 }
 
 func canonicalSettings(v Settings) Settings {
+	if v.EstimateMinutes == 0 {
+		v.EstimateMinutes = 15
+	}
 	if v.BlockedWeekly == nil {
 		v.BlockedWeekly = []BlockedWeeklyPeriod{}
 	}

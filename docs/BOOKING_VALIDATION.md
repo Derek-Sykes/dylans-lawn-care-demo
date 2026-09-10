@@ -1,6 +1,17 @@
 # Booking validation
 
-Validation date: September 10, 2026. The original sections below concern the local booking extension on `dev`. The separate manual-server verification is recorded at the end; it does not replace or deploy the existing demo/main environment.
+Validation date: September 10, 2026. The original sections below concern the local booking extension on `dev`. The separate manual-server verification is recorded below; it does not replace or deploy the existing demo/main environment.
+
+## Service appointments, estimates and Calendar edits — September 10
+
+- Before changing the public booking entry points, manual deployment [34538449771](https://github.com/Derek-Sykes/dylans-lawn-care-demo/actions/runs/34538449771) passed at `7af9e304921d9786c99c1b96bda5f0183511c578`; both dev images and the run receipt matched. The saved owner session and Google connection survived.
+- Public navigation, hero, contact section and mobile action bar now expose service booking. A separate estimate link and two labeled booking-page choices distinguish actual service work from an estimate/callback conversation. Both forms require service, time, name, phone, email and address; notes remain optional.
+- New installations default to 60-minute service jobs and 15-minute estimates/callbacks, with separate owner settings. Existing settings and appointments are preserved. Separate owner views track Needs contact, Contacted and Confirmed independently from Calendar synchronization.
+- The full Go race suite and isolated application integration passed, including legacy database/retry migration, independent durations and shared occupancy, concurrent submissions, incoming Calendar changes, pagination/token expiry, all-day/DST behavior, cancellation races, provider failures and restart persistence.
+- A real local service request with empty optional notes reached Google Calendar as a 60-minute job. Editing it in Google's interface from 09:00–10:00 to 10:15–11:45 updated the open owner detail to 90 minutes, preserved its unsaved private-note and contact-status drafts, freed the former slot and blocked both newly overlapping slots. Saving those drafts and restarting the backend preserved the account, custom time and status.
+- A separate real local estimate request reached Calendar as a 15-minute callback, appeared only in its estimate view, and blocked an overlapping service slot. Google's own interface showed distinct service/estimate event titles and correct durations. All requests were clearly marked synthetic tests; no customer email or invitation was sent. Both were cancelled afterward, Google Calendar search confirmed neither test event remained, and temporary Saturday hours were removed. Cancelled local records remain as validation history.
+- Owner-controller regression checks exercise changed times, open note/status drafts, focused controls, stale responses, concurrent fetches, provider warnings, visible-only polling and separate request views. Both manual deployment and ordinary CI run these checks, plus 18 public-controller cases covering each request type, required configuration, optional notes, malformed receipts, exact idempotent retries, duplicate submits and bounded status polling.
+
 
 ## Manual dev deployment implementation checks
 
@@ -59,7 +70,7 @@ Validation date: September 10, 2026. The original sections below concern the loc
 
 Personal Google tokens, sessions, customer records and the encryption key stay in local runtime storage. Runtime copies, including imported application configuration, are excluded from the public repository and both image build contexts. Shared application configuration is supplied through the separate private repository; the public repository contains only the OAuth client identifier.
 
-This version schedules estimate/callback conversations. It has no customer accounts, payments, travel-time optimization or automatic service-duration calculation. It sends no customer emails or Calendar invitations. Primary and app-created calendars are checked; other secondary calendars are outside the first version.
+The September 10 service-booking update replaces the earlier estimate/callback wording: customers now request the actual service visit. It has no customer accounts, payments, travel-time optimization or automatic service-duration calculation. It sends no customer emails or Calendar invitations. Primary and app-created calendars are checked; other secondary calendars are outside the first version.
 
 After real sign-in and a synchronized request, `docker stats --no-stream` reported approximately 9.5 MiB for the booking process and 16.5 MiB for Caddy (about 26 MiB combined). The small test database was 60 KiB after checkpoint, with a 32 KiB SQLite shared-memory file. These are observations from a light local workload, not a capacity guarantee, and exclude Docker Desktop, image builds and build caches.
 

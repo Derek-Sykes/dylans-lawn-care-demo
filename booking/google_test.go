@@ -73,6 +73,12 @@ func mockGoogle(t *testing.T, a *App) *googleFixture {
 				return
 			}
 			writeJSON(w, 200, map[string]any{"calendars": map[string]any{"primary": map[string]any{"busy": []any{}}, "fixture-booking-calendar": map[string]any{"busy": []any{}}}})
+		case r.URL.Path == "/calendar/v3/calendars/fixture-booking-calendar/events" && r.Method == "GET":
+			events := []map[string]any{}
+			for _, event := range f.events {
+				events = append(events, event)
+			}
+			writeJSON(w, 200, map[string]any{"items": events, "nextSyncToken": "fixture-sync-token", "timeZone": "America/New_York"})
 		case strings.HasPrefix(r.URL.Path, "/calendar/v3/calendars/fixture-booking-calendar/events"):
 			if r.Method == "POST" {
 				var event map[string]any
@@ -300,6 +306,30 @@ func TestGoogleStableEventRetriesAndDisconnect(t *testing.T) {
 	}
 	if err = a.google.Sync(context.Background(), b); err != nil || f.inserts != 1 {
 		t.Fatal("retry duplicated remote appointment")
+	}
+	f.mu.Lock()
+	event := f.events[b.EventID]
+	f.mu.Unlock()
+	if event["summary"] != "Service appointment · Lawn care · Sample Customer" || event["location"] != b.Address || event["visibility"] != "private" {
+		t.Fatal("calendar event did not identify the private service job and property")
+	}
+	description, _ := event["description"].(string)
+	for _, detail := range []string{"service appointment request", "Service: Lawn care", b.Name, b.Phone, b.Email, b.Address, b.Notes} {
+		if !strings.Contains(description, detail) {
+			t.Fatalf("calendar event omitted job detail %q", detail)
+		}
+	}
+	for _, label := range []string{"start", "end"} {
+		value, _ := event[label].(map[string]any)
+		dateTime, _ := value["dateTime"].(string)
+		got, parseErr := time.Parse(time.RFC3339, dateTime)
+		want := b.Start
+		if label == "end" {
+			want = b.End
+		}
+		if parseErr != nil || !got.Equal(want) {
+			t.Fatalf("calendar event changed the requested job %s time", label)
+		}
 	}
 	b.Status = "cancelled"
 	f.loseDelete = true

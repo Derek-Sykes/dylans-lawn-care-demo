@@ -18,6 +18,7 @@ import (
 
 type Booking struct {
 	ID             string    `json:"id"`
+	Kind           string    `json:"kind"`
 	Start          time.Time `json:"start"`
 	End            time.Time `json:"end"`
 	ServiceID      string    `json:"serviceId"`
@@ -45,6 +46,7 @@ type BookingInput struct {
 	Address        string `json:"address"`
 	Notes          string `json:"notes"`
 	IdempotencyKey string `json:"idempotencyKey"`
+	Kind           string `json:"kind,omitempty"`
 }
 type apiError struct {
 	Status        int
@@ -83,7 +85,21 @@ func validText(v string, min, max int) bool {
 
 var idemPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 
+func bookingKind(kind string) (string, error) {
+	if kind == "" {
+		return "service", nil
+	}
+	if kind != "service" && kind != "estimate" {
+		return "", &apiError{400, "invalid_kind", "Choose a service appointment or an estimate and callback."}
+	}
+	return kind, nil
+}
+
 func normalizeInput(v *BookingInput) (time.Time, error) {
+	var err error
+	if v.Kind, err = bookingKind(v.Kind); err != nil {
+		return time.Time{}, err
+	}
 	v.Name = strings.TrimSpace(v.Name)
 	v.Email = strings.ToLower(strings.TrimSpace(v.Email))
 	v.Phone = strings.TrimSpace(v.Phone)
@@ -115,6 +131,11 @@ func normalizeInput(v *BookingInput) (time.Time, error) {
 }
 func inputHash(v BookingInput) string {
 	v.IdempotencyKey = ""
+	// Existing service requests were hashed before Kind existed. Keep precisely
+	// their original JSON field order and omit the default kind from this hash.
+	if v.Kind == "service" {
+		v.Kind = ""
+	}
 	b, _ := json.Marshal(v)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
@@ -127,14 +148,14 @@ func bookingID() string {
 	return hex.EncodeToString(b)
 }
 
-const bookingColumns = `id,start,end,service_id,name,email,phone,address,notes,status,calendar_status,created_at,admin_notes,event_id,blocked_end,payload_hash,generation,attempts`
+const bookingColumns = `id,start,end,service_id,name,email,phone,address,notes,status,calendar_status,created_at,admin_notes,event_id,blocked_end,payload_hash,generation,attempts,kind`
 
 type scanner interface{ Scan(...any) error }
 
 func scanBooking(row scanner) (Booking, error) {
 	var b Booking
 	var start, end, created, blocked int64
-	err := row.Scan(&b.ID, &start, &end, &b.ServiceID, &b.Name, &b.Email, &b.Phone, &b.Address, &b.Notes, &b.Status, &b.CalendarStatus, &created, &b.AdminNotes, &b.EventID, &blocked, &b.PayloadHash, &b.Generation, &b.Attempts)
+	err := row.Scan(&b.ID, &start, &end, &b.ServiceID, &b.Name, &b.Email, &b.Phone, &b.Address, &b.Notes, &b.Status, &b.CalendarStatus, &created, &b.AdminNotes, &b.EventID, &blocked, &b.PayloadHash, &b.Generation, &b.Attempts, &b.Kind)
 	b.Start = time.Unix(start, 0).UTC()
 	b.End = time.Unix(end, 0).UTC()
 	b.CreatedAt = time.Unix(created, 0).UTC()
@@ -164,12 +185,23 @@ func (s *Store) localBusy(start, end time.Time) ([]Busy, error) {
 	return out, rows.Err()
 }
 
-func (a *App) availableSlots(ctx context.Context, date string) ([]Slot, Settings, error) {
+func (a *App) availableSlots(ctx context.Context, date string, kinds ...string) ([]Slot, Settings, error) {
+	kind := "service"
+	if len(kinds) > 0 {
+		var err error
+		if kind, err = bookingKind(kinds[0]); err != nil {
+			return nil, Settings{}, err
+		}
+	}
 	v, err := a.store.settings()
 	if err != nil {
 		return nil, v, err
 	}
-	slots, err := scheduledSlots(v, date, a.now())
+	schedule := v
+	if kind == "estimate" {
+		schedule.SlotMinutes = v.EstimateMinutes
+	}
+	slots, err := scheduledSlots(schedule, date, a.now())
 	if err != nil {
 		return nil, v, &apiError{400, "invalid_date", err.Error()}
 	}
@@ -178,6 +210,9 @@ func (a *App) availableSlots(ctx context.Context, date string) ([]Slot, Settings
 	}
 	if len(slots) == 0 {
 		return []Slot{}, v, nil
+	}
+	if err = a.refreshCalendar(ctx, true); err != nil {
+		return nil, v, errUnavailable
 	}
 	start := slots[0].Start.Add(-time.Duration(v.BufferMinutes) * time.Minute)
 	end := slots[len(slots)-1].End.Add(time.Duration(v.BufferMinutes) * time.Minute)
@@ -225,7 +260,11 @@ func (a *App) createBooking(ctx context.Context, in BookingInput) (Booking, bool
 		return Booking{}, false, err
 	}
 	loc, _ := time.LoadLocation(v.TimeZone)
-	slots, err := scheduledSlots(v, start.In(loc).Format("2006-01-02"), a.now())
+	schedule := v
+	if in.Kind == "estimate" {
+		schedule.SlotMinutes = v.EstimateMinutes
+	}
+	slots, err := scheduledSlots(schedule, start.In(loc).Format("2006-01-02"), a.now())
 	if err != nil {
 		return Booking{}, false, err
 	}
@@ -242,6 +281,9 @@ func (a *App) createBooking(ctx context.Context, in BookingInput) (Booking, bool
 	if !a.calendar.Connected() {
 		return Booking{}, false, errUnavailable
 	}
+	if err = a.refreshCalendar(ctx, true); err != nil {
+		return Booking{}, false, errUnavailable
+	}
 	buffer := time.Duration(v.BufferMinutes) * time.Minute
 	busy, err := a.calendar.Busy(ctx, start.Add(-buffer), selected.End.Add(buffer))
 	if err != nil {
@@ -255,7 +297,7 @@ func (a *App) createBooking(ctx context.Context, in BookingInput) (Booking, bool
 	}
 	id := bookingID()
 	now := a.now().UTC()
-	_, err = a.store.db.ExecContext(ctx, `INSERT INTO bookings(id,idempotency_key,payload_hash,start,end,blocked_end,service_id,name,email,phone,address,notes,created_at,event_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, a.store.hash(in.IdempotencyKey), hash, start.Unix(), selected.End.Unix(), selected.End.Add(buffer).Unix(), in.ServiceID, in.Name, in.Email, in.Phone, in.Address, in.Notes, now.Unix(), "d"+id)
+	_, err = a.store.db.ExecContext(ctx, `INSERT INTO bookings(id,idempotency_key,payload_hash,start,end,blocked_end,service_id,name,email,phone,address,notes,created_at,event_id,kind) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, a.store.hash(in.IdempotencyKey), hash, start.Unix(), selected.End.Unix(), selected.End.Add(buffer).Unix(), in.ServiceID, in.Name, in.Email, in.Phone, in.Address, in.Notes, now.Unix(), "d"+id, in.Kind)
 	if err != nil {
 		if existing, e := a.store.byIdempotency(in.IdempotencyKey); e == nil {
 			if existing.PayloadHash == hash {
@@ -337,6 +379,7 @@ func (a *App) worker(ctx context.Context) {
 		case <-a.wake:
 		}
 		a.syncDue(ctx)
+		_ = a.refreshCalendar(ctx, false)
 		a.store.cleanup(a.now())
 	}
 }
