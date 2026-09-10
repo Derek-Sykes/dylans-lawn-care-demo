@@ -14,7 +14,7 @@ done
 case "$command" in build|start|dev|update|stop|status|logs|check|open|help) ;; *) echo 'Unknown command. Run ./website help.' >&2; exit 1 ;; esac
 if [[ "$command" == help ]]; then
   echo 'Usage: ./website start|dev|build|check|update|stop|status|logs|open [--no-open]'
-  echo 'Only Docker is needed to start. Git is needed for safe updates. Ports and booking data persist.'
+  echo 'Docker runs the application. First Google setup uses your existing private-repository Git access. Ports and booking data persist.'
   exit 0
 fi
 umask 077
@@ -163,6 +163,87 @@ start_stack() {
   done
   echo 'Ports kept changing while the application started. Try again.' >&2; return 1
 }
+private_git() (
+  # Never inherit tracing into a process that handles the private client file.
+  set +x
+  local name
+  for name in $(compgen -e); do
+    case "$name" in GIT_TRACE*|GCM_TRACE*|GIT_CURL_VERBOSE|GCM_DEBUG) unset "$name" ;; esac
+  done
+  export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=0 GCM_TRACE_SECRETS=0
+  # Docker needs the caller's MSYS conversion override; Git needs its normal native path handling.
+  unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+  git --no-pager -c credential.interactive=false -c http.sslVerify=true -c core.longpaths=true \
+    -c http.lowSpeedLimit=1 -c http.lowSpeedTime=30 -c "core.hooksPath=$private_empty" "$@"
+)
+ensure_google_config() (
+  # Keep secret-bearing variables inside this untraced subshell.
+  set +x
+  local status temporary='' repository private_empty size private_json destination
+  if compose exec -T booking booking google-config status >/dev/null 2>&1; then return; else status=$?; fi
+  if (( status != 3 )); then
+    echo 'Could not check saved Google configuration. Run the logs command, resolve the local application error, and retry start.' >&2; return 1
+  fi
+  type git >/dev/null 2>&1 || {
+    echo 'First Google setup requires Git with access to Derek-Sykes/xsolutions-booking-private. Install/sign in to Git on this machine and retry start.' >&2; return 1;
+  }
+  [[ ! -L "$ROOT/.local" ]] || { echo 'Private setup requires .local to be a regular directory, not a link.' >&2; return 1; }
+  temporary=$(mktemp -d "$ROOT/.local/gc-XXXXXXXXXXXX")
+  cleanup_private_config() {
+    local parent resolved
+    [[ -n "$temporary" && -d "$temporary" && ! -L "$temporary" ]] || return
+    parent=$(cd -- "$ROOT/.local" && pwd -P)
+    resolved=$(cd -- "$temporary" && pwd -P)
+    if [[ "$(dirname -- "$resolved")" == "$parent" && "$(basename -- "$resolved")" == gc-* ]]; then
+      rm -rf -- "$resolved"
+    else
+      echo 'Refused cleanup outside the private setup directory.' >&2
+      return 1
+    fi
+  }
+  trap cleanup_private_config EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  chmod 700 "$temporary"
+  case "$(uname -s)" in
+    MINGW*|MSYS*)
+      # NTFS requires an ACL; POSIX mode bits alone do not protect a Git Bash directory.
+      local windows_temp
+      windows_temp=$(cygpath -m "$temporary")
+      DYLAN_PRIVATE_TEMP="$windows_temp" powershell.exe -NoProfile -NonInteractive -Command \
+        '$p=$env:DYLAN_PRIVATE_TEMP; $a=New-Object Security.AccessControl.DirectorySecurity; $a.SetAccessRuleProtection($true,$false); $u=[Security.Principal.WindowsIdentity]::GetCurrent().User; $r=New-Object Security.AccessControl.FileSystemAccessRule($u,"FullControl","ContainerInherit,ObjectInherit","None","Allow"); $a.AddAccessRule($r); [IO.Directory]::SetAccessControl($p,$a)' >/dev/null 2>&1 || {
+          echo 'Could not restrict access to the private setup directory.' >&2; return 1;
+        }
+      ;;
+  esac
+  private_empty="$temporary/empty"; repository="$temporary/repo"
+  mkdir "$private_empty"
+  local private_url='https://github.com/Derek-Sykes/xsolutions-booking-private.git'
+  if ! destination=$(private_git ls-remote --get-url "$private_url" 2>/dev/null); then
+    echo 'Could not inspect the private setup repository URL. Check Git settings and retry start.' >&2; return 1
+  fi
+  case "$destination" in
+    "$private_url"|'git@github.com:Derek-Sykes/xsolutions-booking-private.git'|'ssh://git@github.com/Derek-Sykes/xsolutions-booking-private.git') ;;
+    *) echo 'Git rewrites the private setup repository to an unexpected destination. Correct that repository URL rewrite in your Git settings, then retry start.' >&2; return 1 ;;
+  esac
+  echo 'Preparing Google connection using your existing Git access...'
+  if ! private_git clone --quiet --depth 1 --single-branch --branch main --no-tags --no-checkout \
+      "--template=$private_empty" "$private_url" "$repository" >/dev/null 2>&1; then
+    echo 'Could not access private Google setup. Make sure the Git account on this machine has access to Derek-Sykes/xsolutions-booking-private, then retry start. Browser sign-in alone does not sign Git in.' >&2; return 1
+  fi
+  if ! size=$(private_git -C "$repository" cat-file -s HEAD:google-client.json 2>/dev/null) || [[ ! "$size" =~ ^[0-9]+$ ]] || (( size > 65536 )); then
+    echo 'The private repository needs a valid google-client.json on main (maximum 64 KiB). Ask its maintainer to correct the file, then retry start.' >&2; return 1
+  fi
+  if ! private_json=$(private_git -C "$repository" cat-file blob HEAD:google-client.json 2>/dev/null); then
+    echo 'Could not read the Google setup file from the private repository. Ask its maintainer to check the file, then retry start.' >&2; return 1
+  fi
+  if ! printf '%s' "$private_json" | compose exec -T booking booking google-config import >/dev/null 2>&1; then
+    private_json=''
+    echo 'The private Google setup could not be imported. Ask its maintainer to check the registered client configuration, then retry start.' >&2; return 1
+  fi
+  private_json=''
+  echo 'Google connection configuration saved privately for this installation.'
+)
 check_application() (
   docker build --target test "$ROOT/booking"
   DYLAN_PROJECT="dylan-check-$(secret | cut -c1-12)"
@@ -187,7 +268,7 @@ show_site() {
   fi
 }
 update_source() {
-  type git >/dev/null 2>&1 || { echo 'Git is required only for update.' >&2; return 1; }
+  type git >/dev/null 2>&1 || { echo 'Git is required for safe updates.' >&2; return 1; }
   local branch
   branch=$(git branch --show-current)
   [[ "$branch" == dev || "$branch" == main ]] || { echo 'Update follows only the current dev or main branch.' >&2; return 1; }
@@ -204,7 +285,7 @@ case "$command" in
     build
     check_static
     [[ "$command" != check ]] || check_application
-    if [[ "$command" == start || "$command" == dev || "$command" == update ]]; then start_stack "$command" false; show_site; fi
+    if [[ "$command" == start || "$command" == dev || "$command" == update ]]; then start_stack "$command" false; ensure_google_config; show_site; fi
     ;;
   stop) compose down; echo 'Stopped this install. Booking data is preserved.' ;;
   status) compose ps; printf 'Public website: %s/\nAdmin workspace: %s/\n' "$PUBLIC_ORIGIN" "$ADMIN_ORIGIN" ;;

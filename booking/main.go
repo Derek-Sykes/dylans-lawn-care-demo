@@ -10,6 +10,9 @@ import (
 
 func main() {
 	log.SetFlags(0)
+	if len(os.Args) > 1 {
+		os.Exit(runGoogleConfigCommand(os.Args[1:], os.Stdin, os.Stderr, loadConfig))
+	}
 	config, err := loadConfig()
 	if err != nil {
 		log.Fatal("Booking configuration is invalid: ", err)

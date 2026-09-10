@@ -93,13 +93,7 @@ func (a *App) handleGoogleConfigure(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
-	valid := in.ClientID != "" && len(in.ClientID) <= 255 && in.ClientID == a.cfg.ClientID && len(in.ClientSecret) >= 8 && len(in.ClientSecret) <= 512
-	for _, c := range in.ClientSecret {
-		if c < 33 || c > 126 {
-			valid = false
-		}
-	}
-	if !valid {
+	if !validClientConfiguration(in, a.cfg.ClientID) {
 		writeError(w, &apiError{400, "invalid_client_configuration", "Choose the private desktop client file for this installation's registered Google app."})
 		return
 	}

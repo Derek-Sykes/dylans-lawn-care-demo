@@ -20,6 +20,14 @@ Validation date: September 10, 2026. These checks concern the local booking exte
 - Desktop screenshots were reviewed for the public form and owner workspace. At a 390-pixel viewport, public fields and the admin request layout fit without horizontal overflow. Native iOS/Safari and macOS rendering were not tested.
 - Frontend-focused tests exercise validation, exact idempotent retry payloads, bounded confirmation refresh, configuration JSON parsing/import, duplicate submits, logout races, replacement configuration and live connection refresh.
 
+## Automatic private Google configuration
+
+- The application configuration file is provisioned in the separate private repository. The public source contains no client secret, personal Google token or local runtime state.
+- The revised PowerShell 5.1 `check` completed successfully: static packaging, race-enabled Go tests and isolated HTTP integration. Normal Docker progress and cleanup messages no longer produce a false failure in Windows PowerShell.
+- All 21 targeted setup checks passed across PowerShell 7, Windows PowerShell 5.1 and Git Bash. Each shell checks missing, oversized, malformed and mismatched files, unexpected Git URL rewrites, successful private import and cleanup, and reuse when private Git access is unavailable. These tests use synthetic credentials.
+- Sanitized Git authentication to the actual private repository succeeded in all three shells, using the existing host Git credentials.
+- Backend tests verify both supported Google JSON formats, exact client matching, bounded input, encrypted persistence, preservation of existing configuration and owner data, and concurrent imports.
+- Windows fixes cover long checkout paths, UTF-8 input, executable discovery, Git Bash path conversion and private-directory permissions.
 ## Data and operating boundaries
 
 Google tokens, imported configuration, sessions, customer records and the encryption key are local runtime data. They are excluded from Git and both image build contexts. The public repository contains only the OAuth client identifier.

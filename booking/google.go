@@ -42,6 +42,19 @@ type GoogleClientConfig struct {
 	ClientID     string `json:"clientId"`
 	ClientSecret string `json:"clientSecret"`
 }
+
+func validClientConfiguration(in GoogleClientConfig, expectedID string) bool {
+	if in.ClientID == "" || len(in.ClientID) > 255 || in.ClientID != expectedID || len(in.ClientSecret) < 8 || len(in.ClientSecret) > 512 {
+		return false
+	}
+	for _, c := range in.ClientSecret {
+		if c < 33 || c > 126 {
+			return false
+		}
+	}
+	return true
+}
+
 type Connection struct {
 	Connected bool
 	Error     string

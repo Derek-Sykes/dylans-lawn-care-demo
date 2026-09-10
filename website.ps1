@@ -136,7 +136,7 @@ function Test-Static {
       '--mount',"type=bind,source=$script:SiteRoot/dist,target=/expected,readonly",
       '--mount',"type=bind,source=$script:SiteRoot/scripts,target=/checks,readonly",
       '--entrypoint','sh',$env:DYLAN_WEB_IMAGE,'/checks/check-static.sh')
-  } finally { & docker rm --force $name 2>$null | Out-Null }
+  } finally { $null = Invoke-PrivateProcess docker @('rm','--force',$name) }
 }
 function Test-Port([int]$Port) {
   $bindings = & docker ps --filter "label=com.docker.compose.project=$env:DYLAN_PROJECT" --format '{{.Ports}}'
@@ -171,18 +171,116 @@ function Start-Stack([switch]$DevMode, [switch]$Temporary) {
     $arguments = (Get-Compose -DevMode:$DevMode) + @('up','--detach','--no-build','--wait','--wait-timeout','100')
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $output = (& docker @arguments 2>&1 | Out-String)
+    $output = (& docker @arguments 2>&1 | ForEach-Object { $_.ToString() } | Out-String)
     $result = $LASTEXITCODE
     $ErrorActionPreference = $previousPreference
     if ($result -eq 0) { Write-Host $output.TrimEnd(); return }
     if ($output -notmatch '(?i)port is already allocated|address already in use|ports are not available|bind.*forbidden|failed to bind') {
       throw "The local application could not become ready. $output"
     }
-    & docker @((Get-Compose) + @('down')) 2>$null | Out-Null
+    $null = Invoke-PrivateProcess docker ((Get-Compose) + @('down'))
     $env:DYLAN_PORT = "$(Next-Port ([int]$env:DYLAN_PORT))"
     $env:DYLAN_ADMIN_PORT = "$(Next-Port ([int]$env:DYLAN_ADMIN_PORT))"
   }
   throw 'Ports kept changing while the application started. Try again.'
+}
+function Invoke-PrivateProcess([string]$Program, [string[]]$Arguments, [string]$InputText = '') {
+  # Redirected streams keep credentials and Git diagnostics out of the console in PS 5.1 and 7.
+  $info = New-Object Diagnostics.ProcessStartInfo
+  $application = Get-Command $Program -CommandType Application -ErrorAction Stop | Select-Object -First 1
+  $info.FileName = $application.Source
+  $quoted = foreach ($argument in $Arguments) {
+    '"' + ([regex]::Replace([regex]::Replace($argument, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1')) + '"'
+  }
+  $info.Arguments = $quoted -join ' '
+  $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+  $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true; $info.RedirectStandardInput = $true
+  $info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+  foreach ($key in @($info.EnvironmentVariables.Keys)) {
+    if ($key -match '^(GIT_TRACE|GCM_TRACE)' -or $key -in @('GIT_CURL_VERBOSE','GCM_DEBUG')) { $info.EnvironmentVariables.Remove($key) }
+  }
+  $info.EnvironmentVariables['GIT_TERMINAL_PROMPT'] = '0'
+  $info.EnvironmentVariables['GCM_INTERACTIVE'] = '0'
+  $info.EnvironmentVariables['GCM_TRACE_SECRETS'] = '0'
+  $process = New-Object Diagnostics.Process
+  $process.StartInfo = $info
+  try {
+    $null = $process.Start()
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    if ($InputText) {
+      $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($InputText)
+      $process.StandardInput.BaseStream.Write($bytes,0,$bytes.Length)
+      [Array]::Clear($bytes,0,$bytes.Length)
+    }
+    $process.StandardInput.Close()
+    if (-not $process.WaitForExit(120000)) { $process.Kill(); $process.WaitForExit(); throw 'Private configuration retrieval timed out. Check Git access and try start again.' }
+    $result = @{ Code = $process.ExitCode; Text = $stdout.GetAwaiter().GetResult() }
+    $null = $stderr.GetAwaiter().GetResult()
+    return $result
+  } finally { $process.Dispose() }
+}
+function Ensure-GoogleConfig {
+  $arguments = (Get-Compose) + @('exec','-T','booking','booking','google-config')
+  $status = Invoke-PrivateProcess docker ($arguments + @('status'))
+  if ($status.Code -eq 0) { return }
+  if ($status.Code -ne 3) { throw 'Could not check saved Google configuration. Run the logs command, resolve the local application error, and retry start.' }
+  if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+    throw 'First Google setup requires Git with access to the private repository Derek-Sykes/xsolutions-booking-private. Install/sign in to Git on this machine and retry start.'
+  }
+  $local = Get-Item -LiteralPath (Join-Path $script:SiteRoot '.local') -Force
+  if ($local.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Private setup requires .local to be a regular directory, not a link.' }
+  $temporary = Join-Path $local.FullName ("gc-" + [guid]::NewGuid().ToString('N').Substring(0,12))
+  $privateJSON = $null
+  try {
+    New-Item -ItemType Directory -Path $temporary | Out-Null
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+      $acl = New-Object Security.AccessControl.DirectorySecurity
+      $acl.SetAccessRuleProtection($true,$false)
+      $identity = [Security.Principal.WindowsIdentity]::GetCurrent().User
+      $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
+      $acl.AddAccessRule($rule)
+      Set-Acl -LiteralPath $temporary -AclObject $acl
+    } else { Invoke-Native chmod @('700',$temporary) }
+    $empty = Join-Path $temporary 'empty'
+    New-Item -ItemType Directory -Path $empty | Out-Null
+    $repository = Join-Path $temporary 'repo'
+    $gitOptions = @('--no-pager','-c','credential.interactive=false','-c','http.sslVerify=true','-c','core.longpaths=true',
+      '-c','http.lowSpeedLimit=1','-c','http.lowSpeedTime=30','-c',"core.hooksPath=$empty")
+    $privateURL = 'https://github.com/Derek-Sykes/xsolutions-booking-private.git'
+    $destination = Invoke-PrivateProcess git ($gitOptions + @('ls-remote','--get-url',$privateURL))
+    $allowed = @($privateURL,'git@github.com:Derek-Sykes/xsolutions-booking-private.git','ssh://git@github.com/Derek-Sykes/xsolutions-booking-private.git')
+    if ($destination.Code -ne 0 -or $destination.Text.Trim() -cnotin $allowed) {
+      throw 'Git rewrites the private setup repository to an unexpected destination. Correct that repository URL rewrite in your Git settings, then retry start.'
+    }
+    Write-Host 'Preparing Google connection using your existing Git access...'
+    $clone = Invoke-PrivateProcess git ($gitOptions + @('clone','--quiet','--depth','1','--single-branch','--branch','main','--no-tags','--no-checkout',"--template=$empty",
+      $privateURL,$repository))
+    if ($clone.Code -ne 0) {
+      throw 'Could not access private Google setup. Make sure the Git account on this machine has access to Derek-Sykes/xsolutions-booking-private, then retry start. Browser sign-in alone does not sign Git in.'
+    }
+    $size = Invoke-PrivateProcess git ($gitOptions + @('-C',$repository,'cat-file','-s','HEAD:google-client.json'))
+    if ($size.Code -ne 0 -or $size.Text.Trim() -notmatch '^\d+$' -or [long]$size.Text.Trim() -gt 65536) {
+      throw 'The private repository needs a valid google-client.json on main (maximum 64 KiB). Ask its maintainer to correct the file, then retry start.'
+    }
+    $blob = Invoke-PrivateProcess git ($gitOptions + @('-C',$repository,'cat-file','blob','HEAD:google-client.json'))
+    if ($blob.Code -ne 0) { throw 'Could not read the Google setup file from the private repository. Ask its maintainer to check the file, then retry start.' }
+    $privateJSON = $blob.Text; $blob.Text = $null
+    $import = Invoke-PrivateProcess docker ($arguments + @('import')) $privateJSON
+    if ($import.Code -ne 0) { throw 'The private Google setup could not be imported. Ask its maintainer to check the registered client configuration, then retry start.' }
+    Write-Host 'Google connection configuration saved privately for this installation.'
+  } finally {
+    $privateJSON = $null
+    if (Test-Path -LiteralPath $temporary) {
+      $target = Get-Item -LiteralPath $temporary -Force
+      $expectedParent = [IO.Path]::GetFullPath($local.FullName).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+      if ($target.Parent.FullName.TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar) -ne $expectedParent -or
+          $target.Name -notmatch '^gc-[a-f0-9]{12}$' -or ($target.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'Refused cleanup outside the private setup directory.'
+      }
+      Remove-Item -LiteralPath $target.FullName -Recurse -Force
+    }
+  }
 }
 function Test-Application {
   Invoke-Native docker @('build','--target','test',(Join-Path $script:SiteRoot 'booking'))
@@ -202,8 +300,9 @@ function Test-Application {
       '--mount',"type=bind,source=$script:SiteRoot/scripts,target=/checks,readonly",
       'python:3.14-alpine','python','/checks/check-application.py')
   } finally {
-    & docker @((Get-Compose) + @('down','--volumes')) 2>$null | Out-Null
+    $cleanup = Invoke-PrivateProcess docker ((Get-Compose) + @('down','--volumes'))
     foreach ($key in $keys) { [Environment]::SetEnvironmentVariable($key,$snapshot[$key]) }
+    if ($cleanup.Code -ne 0) { throw "Could not remove isolated check resources for $checkProject." }
   }
 }
 function Show-Site {
@@ -220,7 +319,7 @@ function Show-Site {
   }
 }
 function Update-Source {
-  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git is required only for update.' }
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git is required for safe updates.' }
   $branch = & git -C $script:SiteRoot branch --show-current 2>$null
   if ($LASTEXITCODE -ne 0 -or $branch -notin @('dev','main')) { throw 'Update follows the current dev or main branch. Switch to dev before updating.' }
   $dirty = & git -C $script:SiteRoot status --porcelain --untracked-files=all
@@ -235,7 +334,7 @@ Push-Location $script:SiteRoot
 try {
   if ($Command -eq 'help') {
     Write-Host 'Usage: .\website.ps1 start|dev|build|check|update|stop|status|logs|open [-NoOpen]'
-    Write-Host 'Only Docker is needed to start. Git is needed for safe updates. Ports and booking data persist.'
+    Write-Host 'Docker runs the application. First Google setup uses your existing private-repository Git access. Ports and booking data persist.'
   } else {
     Initialize-Local
     if ($Command -eq 'open') { Show-Site }
@@ -249,6 +348,7 @@ try {
           if ($Command -eq 'check') { Test-Application }
           if ($Command -in @('start','dev','update')) {
             Start-Stack -DevMode:($Command -eq 'dev')
+            Ensure-GoogleConfig
             Show-Site
           }
         }

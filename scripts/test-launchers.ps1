@@ -6,6 +6,9 @@ $qaRoot = Join-Path $siteRoot ".local/launcher-tests/$runId"
 $seed = Join-Path $qaRoot 'source fixture'
 $cloneA = Join-Path $qaRoot 'clone a'
 $cloneB = Join-Path $qaRoot 'clone b'
+$privateFixture = Join-Path $qaRoot 'private fixture'
+$privateOffline = Join-Path $qaRoot 'private fixture offline'
+$dummySecret = "fixture-only-not-a-google-secret-$runId"
 $projectA = "dylan-launcher-test-$runId-a"
 $projectB = "dylan-launcher-test-$runId-b"
 $blocker = "dylan-launcher-test-$runId-port"
@@ -29,7 +32,7 @@ function State([string]$Clone) {
   }
   return $values
 }
-function Launch([string]$Clone,[string]$Action,[switch]$Bash,[switch]$Refuse) {
+function Launch([string]$Clone,[string]$Action,[switch]$Bash,[switch]$Refuse,[string]$ExpectedMessage = '') {
   Push-Location $Clone
   try {
     $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
@@ -38,6 +41,9 @@ function Launch([string]$Clone,[string]$Action,[switch]$Bash,[switch]$Refuse) {
     $code = $LASTEXITCODE; $ErrorActionPreference = $previous
     $testState = State $Clone
     if ($output.Contains($testState.BOOTSTRAP_TOKEN)) { throw 'Launcher printed a private bootstrap token.' }
+    if ($output.Contains($dummySecret)) { throw 'Launcher printed dummy private configuration.' }
+    if (Get-ChildItem -LiteralPath (Join-Path $Clone '.local') -Directory -Filter 'gc-*') { throw 'Private temporary repository survived launcher completion.' }
+    if ($ExpectedMessage -and -not $output.Contains($ExpectedMessage)) { throw "Expected safe setup result was not reported: $ExpectedMessage. Output: $output" }
     if ($Refuse) {
       if ($code -eq 0) { throw "$Action should have refused unsafe source." }
     } elseif ($code -ne 0) { throw "$Action failed: $output" }
@@ -56,15 +62,32 @@ function SaveOwnerSettings([hashtable]$Auth,$Settings) {
   Invoke-RestMethod "$($Auth.Origin)/api/admin/settings" -Method Put -WebSession $Auth.Session -Headers @{Origin=$Auth.Origin;'X-CSRF-Token'=$Auth.Csrf} -ContentType application/json -Body ($Settings | ConvertTo-Json -Depth 10) | Out-Null
 }
 function CleanProject([string]$Project) {
-  $containers = & docker ps -aq --filter "label=com.docker.compose.project=$Project"
-  if ($containers) { & docker rm --force @containers | Out-Null }
-  & docker network rm "$($Project)_default" 2>$null | Out-Null
-  & docker volume rm "$($Project)_booking-data" 2>$null | Out-Null
+  $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try {
+    $containers = & docker ps -aq --filter "label=com.docker.compose.project=$Project"
+    if ($containers) { & docker rm --force @containers 2>&1 | Out-Null }
+    & docker network rm "$($Project)_default" 2>&1 | Out-Null
+    & docker volume rm "$($Project)_booking-data" 2>&1 | Out-Null
+  } finally { $ErrorActionPreference = $previous }
 }
 try {
+  # Only fixture copies receive this local URL. Production launchers keep a fixed GitHub destination.
+  New-Item -ItemType Directory -Path $privateFixture -Force | Out-Null
+  Native git @('-C',$privateFixture,'init','--initial-branch=main')
+  Native git @('-C',$privateFixture,'config','user.name','Isolated launcher test')
+  Native git @('-C',$privateFixture,'config','user.email','launcher-test@example.invalid')
+  [IO.File]::WriteAllText((Join-Path $privateFixture 'README.md'),'Dummy private setup fixture; never a real credential.')
+  Native git @('-C',$privateFixture,'add','README.md')
+  Native git @('-C',$privateFixture,'commit','-m','Empty private configuration fixture')
+  $privateFixtureURL = ([uri]($privateFixture + [IO.Path]::DirectorySeparatorChar)).AbsoluteUri.TrimEnd('/')
   New-Item -ItemType Directory -Path $seed -Force | Out-Null
   foreach ($name in @('dist','booking','scripts','website','website.ps1','Dockerfile','Caddyfile','Caddyfile.local','compose.local.yaml','compose.dev.yaml','.dockerignore','.gitignore','.gitattributes')) {
     Copy-Item -LiteralPath (Join-Path $siteRoot $name) -Destination $seed -Recurse
+  }
+  foreach ($launcher in @('website','website.ps1')) {
+    $path = Join-Path $seed $launcher
+    $text = [IO.File]::ReadAllText($path).Replace('https://github.com/Derek-Sykes/xsolutions-booking-private.git',$privateFixtureURL)
+    [IO.File]::WriteAllText($path,$text,(New-Object Text.UTF8Encoding($false)))
   }
   Native git @('-C',$seed,'init','--initial-branch=dev')
   Native git @('-C',$seed,'config','user.name','Isolated launcher test')
@@ -95,8 +118,20 @@ try {
   $preferredAdmin = if ($occupied -eq 65535) {1024} else {$occupied+1}
   [IO.File]::WriteAllText((Join-Path $cloneA '.env'), (@("DYLAN_PROJECT=$projectA","DYLAN_PORT=$occupied","DYLAN_ADMIN_PORT=$preferredAdmin",'') -join [char]10))
   [IO.File]::WriteAllText((Join-Path $cloneB '.env'), (@("DYLAN_PROJECT=$projectB","DYLAN_PORT=$occupied","DYLAN_ADMIN_PORT=$preferredAdmin",'') -join [char]10))
-  Launch $cloneA start
-  Launch $cloneB start -Bash:([bool]$BashPath)
+  Launch $cloneA start -Refuse -ExpectedMessage 'needs a valid google-client.json on main'
+  Launch $cloneB start -Bash:([bool]$BashPath) -Refuse -ExpectedMessage 'needs a valid google-client.json on main'
+  Record 'Missing private file fails safely in both launchers and removes the temporary checkout'
+  $publicClient = Get-Content -LiteralPath (Join-Path $seed 'booking/config/google-client.json') -Raw | ConvertFrom-Json
+  $dummyJSON = @{installed=@{client_id=$publicClient.client_id;client_secret=$dummySecret}} | ConvertTo-Json -Depth 3
+  [IO.File]::WriteAllText((Join-Path $privateFixture 'google-client.json'),$dummyJSON,(New-Object Text.UTF8Encoding($false)))
+  Native git @('-C',$privateFixture,'add','google-client.json')
+  Native git @('-C',$privateFixture,'commit','-m','Add synthetic test-only client configuration')
+  Launch $cloneA start -ExpectedMessage 'Google connection configuration saved privately'
+  Launch $cloneB start -Bash:([bool]$BashPath) -ExpectedMessage 'Google connection configuration saved privately'
+  Record 'Fresh PowerShell and Bash installs retrieve and import dummy private Git configuration without printing it'
+  if ((Get-Item -LiteralPath $privateFixture).Parent.FullName -ne (Get-Item -LiteralPath $qaRoot).FullName -or
+      [IO.Path]::GetFullPath((Split-Path $privateOffline -Parent)) -ne [IO.Path]::GetFullPath($qaRoot)) { throw 'Private fixture move escaped the isolated test directory.' }
+  Move-Item -LiteralPath $privateFixture -Destination $privateOffline
   $stateA = State $cloneA; $stateB = State $cloneB
   $ports = @($stateA.DYLAN_PORT,$stateA.DYLAN_ADMIN_PORT,$stateB.DYLAN_PORT,$stateB.DYLAN_ADMIN_PORT)
   if ($ports -contains "$occupied" -or @($ports | Select-Object -Unique).Count -ne 4) { throw 'Collision handling did not produce four independent usable ports.' }
@@ -115,6 +150,7 @@ try {
   $auth = Authenticate $restarted
   if ((ReadOwnerSettings $auth).businessName -ne $settings.businessName) { throw 'Restart lost database settings.' }
   Record 'Stop/start retains ports, install secret and database settings'
+  Record 'Configured installs restart with their private Git source unavailable'
   if ($BashPath) {
     Launch $cloneA status -Bash
     if ((Get-FileHash -LiteralPath (Join-Path $cloneA '.local/runtime.env')).Hash -ne $stateHash) { throw 'Bash changed PowerShell install settings.' }
@@ -154,6 +190,7 @@ try {
 } finally {
   CleanProject $projectA
   CleanProject $projectB
-  & docker rm --force $blocker 2>$null | Out-Null
+  $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { & docker rm --force $blocker 2>&1 | Out-Null } finally { $ErrorActionPreference = $previous }
   Write-Host "Isolated fixture files remain at $qaRoot (ignored by Git)."
 }
