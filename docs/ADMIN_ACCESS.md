@@ -5,7 +5,7 @@ The portal supports an installation operator and multiple invited owners in one 
 ## Normal use
 
 1. The operator opens the admin address and chooses **Sign in with Google**. The installation checks the verified Google identity against its private operator configuration.
-2. In **Access & invitations**, the operator enters a person's Google email address and creates an invitation. It expires after 24 hours. Copy the generated link and send it privately; the application does not send email or messages. Repeat for each person you want to add.
+2. In **Access & invitations**, the operator enters a person's Google email address and creates an invitation. It expires after 24 hours. Copy the generated link and share it privately; invitation links are shared manually. Appointment emails are a separate feature under **Emails**. Repeat for each person you want to add.
 3. The recipient opens the link and signs in with that Google account. The invitation is email-bound, expires and can be redeemed only once. Opening the URL alone does not accept it.
 4. The recipient can immediately manage the same bookings and settings as the other owners. They do not need to connect their own calendar or access the private GitHub repository.
 5. If the workspace has no calendar yet, an approved person opens **Google Calendar** and explicitly chooses **Connect Google Calendar**. Completing that separate consent assigns the calendar account. Joining through an invitation never assigns calendar ownership.

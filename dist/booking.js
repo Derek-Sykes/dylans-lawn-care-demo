@@ -18,7 +18,7 @@
     $('#booking-scope').textContent = 'This reserves a short estimate or callback conversation. Book a service when you’re ready to schedule the work.';
     $('#service-description').textContent = 'What would you like an estimate or advice about?';
     $('#time-heading').textContent = 'When can Dylan call?';
-    $('#booking-privacy').textContent = 'Your details go to Dylan so he can prepare for the call and discuss an estimate. This request does not book a service visit.';
+    $('#booking-privacy').textContent = 'Your details go to Dylan so he can prepare for the call and discuss an estimate. You may receive emails about this request and a reminder. This request does not book a service visit.';
     $('#success-eyebrow').textContent = 'THANK YOU FOR GETTING IN TOUCH';
     $('#submit-booking .button-label').textContent = requestLabel;
   }

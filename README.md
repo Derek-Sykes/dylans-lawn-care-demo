@@ -40,6 +40,8 @@ The owner sets regular working days and hours, date exceptions, and optional tim
 
 The portal supports **multiple owners in one shared workspace**. Each signs in with their own approved Google account and sees the same jobs, estimates and settings. The **operator** can invite people, see who has access, and remove invited owners. Each invitation expires after 24 hours and works once; invitations to different people do not cancel each other. Calendar connection is a separate action: joining never assigns the calendar account. The first approved person to explicitly connect Google Calendar establishes the shared calendar; later sign-ins preserve that connection. The private configuration includes the operator's approved Google identity, not personal Calendar tokens. See [shared access and first-time setup](docs/ADMIN_ACCESS.md).
 
+The **Emails** tab can send request receipts, confirmations, time changes, cancellations and a configurable reminder from that Calendar account's Gmail. The account holder grants send-only Gmail permission separately, then an owner enables automation. Existing bookings are not emailed just because the feature is installed or enabled. Requests remain unconfirmed until an owner confirms them. The shared history shows accepted, failed and uncertain sends; ambiguous attempts need review before retrying. This uses the existing booking container and persistent database. See [appointment email setup and behavior](docs/EMAIL_NOTIFICATIONS.md).
+
 | Task | PowerShell | Bash |
 |---|---|---|
 | Build, verify and start | `.\website.ps1 start` | `./website start` |

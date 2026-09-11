@@ -24,6 +24,7 @@ type OAuthState struct {
 	ActorSubject string `json:"actorSubject"`
 	ActorEmail   string `json:"actorEmail"`
 	InvitationID string `json:"invitationId"`
+	MailVersion  string `json:"mailVersion,omitempty"`
 }
 
 func (a *App) cookieName() string {
@@ -230,7 +231,9 @@ func (a *App) beginOAuth(w http.ResponseWriter, r *http.Request, record OAuthSta
 	// including returning-owner login before an authenticated session exists.
 	http.SetCookie(w, &http.Cookie{Name: a.oauthCookieName(), Value: binding, Path: "/oauth/callback", HttpOnly: true, Secure: a.secureAdmin, SameSite: http.SameSiteLaxMode, MaxAge: 600})
 	url := a.google.authorizationURL(state, verifier, record.RedirectURI)
-	if record.Purpose != "calendar" {
+	if record.Purpose == "gmail" {
+		url = a.google.mailAuthorizationURL(state, verifier, record.RedirectURI)
+	} else if record.Purpose != "calendar" {
 		url = a.google.signInURL(state, verifier, record.RedirectURI)
 	}
 	writeJSON(w, 200, map[string]string{"url": url})
@@ -256,7 +259,11 @@ func (a *App) consumeState(state, binding string) (OAuthState, error) {
 }
 func (a *App) handleCallback(w http.ResponseWriter, r *http.Request) {
 	outcome := "failed"
+	isMail := false
 	defer func() {
+		if isMail {
+			outcome = "gmail_" + outcome
+		}
 		http.SetCookie(w, &http.Cookie{Name: a.oauthCookieName(), Path: "/oauth/callback", HttpOnly: true, Secure: a.secureAdmin, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 		http.Redirect(w, r, a.cfg.adminHomeURL()+"?google="+outcome, http.StatusSeeOther)
 	}()
@@ -268,6 +275,7 @@ func (a *App) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	isMail = record.Purpose == "gmail"
 	if r.URL.Query().Get("error") != "" {
 		outcome = "denied"
 		return
@@ -278,6 +286,15 @@ func (a *App) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	var actor Session
 	switch record.Purpose {
+	case "gmail":
+		actor, err = a.sessionByID(record.SessionID)
+		if err != nil || !a.canConnectMail(actor) || actor.Subject != record.ActorSubject {
+			return
+		}
+		err = a.connectMail(r.Context(), code, record)
+		if err == nil {
+			outcome = "connected"
+		}
 	case "calendar":
 		actor, err = a.sessionByID(record.SessionID)
 		if err != nil || !a.canConnectCalendar(actor) || actor.Subject != record.ActorSubject {

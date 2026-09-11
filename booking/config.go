@@ -16,6 +16,7 @@ type Config struct {
 	ClientID, ClientSecret, OAuthMode                                         string
 	OperatorGoogleSub, OperatorGoogleEmail                                    string
 	AuthURL, TokenURL, UserInfoURL, CalendarURL, RevokeURL                    string
+	GmailURL                                                                  string
 	HTTPTimeout                                                               time.Duration
 }
 
@@ -53,6 +54,7 @@ func loadConfig() (Config, error) {
 	c.TokenURL = "https://oauth2.googleapis.com/token"
 	c.UserInfoURL = "https://openidconnect.googleapis.com/v1/userinfo"
 	c.CalendarURL = "https://www.googleapis.com/calendar/v3"
+	c.GmailURL = "https://gmail.googleapis.com/gmail/v1"
 	c.RevokeURL = "https://oauth2.googleapis.com/revoke"
 	return c, validateConfig(c)
 }

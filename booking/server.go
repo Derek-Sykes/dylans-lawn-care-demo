@@ -32,6 +32,8 @@ type App struct {
 	store                 *Store
 	google                *Google
 	calendar              Calendar
+	mailer                MailSender
+	emailMu               sync.Mutex
 	now                   func() time.Time
 	secureAdmin           bool
 	publicHost, adminHost string
@@ -65,6 +67,7 @@ func newApp(c Config) (*App, error) {
 	}
 	a.google = &Google{cfg: c, store: s, client: &http.Client{Timeout: c.HTTPTimeout, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}, now: func() time.Time { return a.now() }}
 	a.calendar = a.google
+	a.mailer = &GoogleMail{google: a.google}
 	return a, nil
 }
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -258,6 +261,12 @@ func (a *App) adminHandler() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/members/{id}", a.handleMemberRemove)
 	mux.HandleFunc("POST /api/admin/logout", a.handleLogout)
 	mux.HandleFunc("POST /api/admin/google/connect", a.handleConnect)
+	mux.HandleFunc("GET /api/admin/email", a.handleEmailStatus)
+	mux.HandleFunc("PUT /api/admin/email/settings", a.handleEmailSettings)
+	mux.HandleFunc("POST /api/admin/email/test", a.handleEmailTest)
+	mux.HandleFunc("POST /api/admin/email/messages/{id}/retry", a.handleEmailRetry)
+	mux.HandleFunc("POST /api/admin/email/connect", a.handleMailConnect)
+	mux.HandleFunc("POST /api/admin/email/disconnect", a.handleMailDisconnect)
 	mux.HandleFunc("POST /api/admin/google/configure", a.handleGoogleConfigure)
 	mux.HandleFunc("GET /oauth/callback", a.handleCallback)
 	mux.HandleFunc("POST /api/admin/google/disconnect", func(w http.ResponseWriter, r *http.Request) {

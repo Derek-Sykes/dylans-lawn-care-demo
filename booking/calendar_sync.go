@@ -82,7 +82,7 @@ func (g *Google) refresh(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		return g.store.applyCalendarSnapshot(ctx, events, next, cursor.Token == "")
+		return g.store.applyCalendarSnapshot(ctx, events, next, cursor.Token == "", g.now())
 	}
 	return errGoogle
 }
@@ -160,7 +160,11 @@ func eventTimes(event googleEvent, zone string) (time.Time, time.Time, error) {
 	return start.UTC(), end.UTC(), nil
 }
 
-func (s *Store) applyCalendarSnapshot(ctx context.Context, events []googleEvent, cursor calendarCursor, full bool) error {
+func (s *Store) applyCalendarSnapshot(ctx context.Context, events []googleEvent, cursor calendarCursor, full bool, clock ...time.Time) error {
+	now := time.Now()
+	if len(clock) == 1 {
+		now = clock[0]
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -191,7 +195,7 @@ func (s *Store) applyCalendarSnapshot(ctx context.Context, events []googleEvent,
 			continue
 		}
 		seen[event.ID] = true
-		if err = s.applyCalendarEvent(ctx, tx, b, event, cursor.TimeZone); err != nil {
+		if err = s.applyCalendarEvent(ctx, tx, b, event, cursor.TimeZone, now); err != nil {
 			return err
 		}
 	}
@@ -200,7 +204,7 @@ func (s *Store) applyCalendarSnapshot(ctx context.Context, events []googleEvent,
 		// of this calendar. Pending insertions have no proven remote event to remove.
 		for id, b := range known {
 			if !seen[id] && b.CalendarStatus == "synced" && b.Status != "cancelled" {
-				if err = s.applyCalendarEvent(ctx, tx, b, googleEvent{ID: id, Status: "cancelled"}, cursor.TimeZone); err != nil {
+				if err = s.applyCalendarEvent(ctx, tx, b, googleEvent{ID: id, Status: "cancelled"}, cursor.TimeZone, now); err != nil {
 					return err
 				}
 			}
@@ -222,12 +226,21 @@ func (s *Store) applyCalendarSnapshot(ctx context.Context, events []googleEvent,
 	return tx.Commit()
 }
 
-func (s *Store) applyCalendarEvent(ctx context.Context, tx *sql.Tx, b Booking, event googleEvent, zone string) error {
+func (s *Store) applyCalendarEvent(ctx context.Context, tx *sql.Tx, b Booking, event googleEvent, zone string, clock ...time.Time) error {
+	now := time.Now()
+	if len(clock) == 1 {
+		now = clock[0]
+	}
 	if event.Status == "cancelled" {
 		if b.Status == "cancelled" && b.CalendarStatus == "synced" {
 			return nil
 		}
 		_, err := tx.ExecContext(ctx, "UPDATE bookings SET status='cancelled',calendar_status='synced',generation=generation+1,sync_generation=generation+1,attempts=0,next_attempt=0 WHERE id=?", b.ID)
+		if err == nil {
+			after := b
+			after.Status = "cancelled"
+			err = s.queueBookingEmailTx(tx, b, after, now, false)
+		}
 		return err
 	}
 	if event.Extended.Private["booking_id"] != b.ID || event.Extended.Private["installation_id"] != s.installID {
@@ -251,5 +264,10 @@ func (s *Store) applyCalendarEvent(ctx context.Context, tx *sql.Tx, b Booking, e
 	// Google is authoritative for the actual time after an event exists. Keep the
 	// original booking buffer and follow-up status; settings affect new jobs only.
 	_, err = tx.ExecContext(ctx, "UPDATE bookings SET start=?,end=?,blocked_end=?,calendar_status='synced',generation=generation+1,sync_generation=generation+1,attempts=0,next_attempt=0 WHERE id=?", start.Unix(), end.Unix(), end.Add(b.BlockedEnd.Sub(b.End)).Unix(), b.ID)
+	if err == nil {
+		after := b
+		after.Start, after.End = start, end
+		err = s.queueBookingEmailTx(tx, b, after, now, false)
+	}
 	return err
 }

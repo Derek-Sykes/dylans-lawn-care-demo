@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const file = path.join(__dirname, '..', 'booking', 'web', 'admin.js');
 const source = fs.readFileSync(file, 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '..', 'booking', 'web', 'index.html'), 'utf8');
-const testSource = source.replace(/\r?\n  start\(\);\r?\n\}\)\(\);\s*$/, '\n  globalThis.accessTest = { state, start, signInGoogle, connectGoogle, renderConnection, showSignedOut, switchPanel, createInvitation, revokeInvitation, loadInvitations, loadMembers, renderMembers, removeMember, renderSettings, readSettings };\n})();');
+const testSource = source.replace(/\r?\n  start\(\);\r?\n\}\)\(\);\s*$/, '\n  globalThis.accessTest = { state, start, signInGoogle, connectGoogle, renderConnection, showSignedOut, switchPanel, createInvitation, revokeInvitation, loadInvitations, loadMembers, renderMembers, removeMember, renderSettings, readSettings, loadEmails, renderEmails, renderEmailHistory, markEmailDirty, saveEmailSettings, connectEmail, emailCommand, retryEmail, schedulePoll, refreshVisibleBookings };\n})();');
 assert.notEqual(source, testSource, 'Update the fixture intentionally if the controller bootstrap changes.');
 const copy = value => JSON.parse(JSON.stringify(value));
 const session = { authenticated: true, role: 'operator', actorEmail: 'operator@example.test', canManageAccess: true, canConnectCalendar: false, csrfToken: 'fixture-csrf', publicOrigin: 'https://example.test', google: { configured: true, connected: true, email: 'owner@example.test', mode: 'web' } };
@@ -108,6 +108,8 @@ function fixture(hash = '', search = '') {
   return { $, document, window, calls, replies, fields, navigations, historyCalls, clipboard, ...context.accessTest,
     invitationButton: text => $('#invitation-list').querySelectorAll('button').find(button => button.textContent === text),
     memberButton: text => $('#member-list').querySelectorAll('button').find(button => button.textContent === text),
+    emailButton: text => $('#email-history').querySelectorAll('button').find(button => button.textContent === text),
+    timers,
     authenticate(overrides = {}) { this.state.session = { ...copy(session), ...overrides }; this.state.csrf = 'fixture-csrf'; },
     respond(url, data, status = 200) { replies.push({ url, data, status }); }
   };
@@ -426,7 +428,9 @@ test('successful identity login stays on bookings; invitation failures give safe
   }
 });
 
-(async () => {
+if (require.main === module) (async () => {
   for (const { name, run } of tests) { try { await run(); } catch (error) { error.message = `${name}: ${error.message}`; throw error; } }
   console.log(`Admin access checks passed (${tests.length}): shared members, individual invitation replacement, inline removal, role gates, separate calendar consent, private links, stale response cleanup and independent buffers.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+module.exports = { fixture };

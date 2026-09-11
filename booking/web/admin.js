@@ -12,6 +12,7 @@
   const state = { session: null, sessionEpoch: 0, sessionRequest: 0, refreshingSession: false, csrf: '', settings: null, bookings: [], bookingRevision: 0, activePanel: 'bookings', selectedId: null, dirty: false, saving: false, loadingBookings: false, connecting: false, configuring: false, disconnecting: false, replacingConfiguration: false, poll: null };
   Object.assign(state, { invitations: [], invitationLink: null, pendingRevokeId: null, invitationRevision: 0, loadingInvitations: false, savingInvitation: false });
   Object.assign(state, { members: [], pendingRemoveId: null, memberRevision: 0, loadingMembers: false, removingMember: false });
+  Object.assign(state, { email: null, emailRevision: 0, loadingEmails: false, emailBusy: '', emailDirty: false, pendingEmailRetryId: null, pendingEmailDisconnect: false });
   state.activeKind = 'service';
   const statusNames = { needs_followup: 'Needs contact', contacted: 'Contacted', confirmed: 'Confirmed', cancelled: 'Cancelled' };
   const kindOf = booking => booking.kind === 'estimate' ? 'estimate' : 'service';
@@ -56,6 +57,7 @@
     const initialSetup = state.session?.role === 'bootstrap';
     const canConnect = Boolean(state.session?.authenticated && state.session.canConnectCalendar && !initialSetup);
     const canManage = Boolean(state.session?.authenticated && state.session.canManageAccess);
+    if (!state.session?.authenticated || initialSetup) resetEmails();
     $('#sidebar-dot').classList.toggle('connected', connected && !needsAttention);
     $('#sidebar-connection').textContent = needsAttention ? 'Calendar needs attention' : connected ? 'Calendar connected' : 'Calendar disconnected';
     $('#calendar-badge').textContent = needsAttention ? 'Needs attention' : connected ? 'Connected' : google.configured ? 'Not connected' : 'Setup needed';
@@ -117,6 +119,7 @@
     state.csrf = ''; state.bookings = []; state.settings = null; state.selectedId = null; state.dirty = false; state.saving = false; state.loadingBookings = false; state.connecting = false; state.configuring = false; state.disconnecting = false; state.replacingConfiguration = false;
     state.invitations = []; state.pendingRevokeId = null; state.invitationRevision++; state.loadingInvitations = false; state.savingInvitation = false;
     resetMembers();
+    resetEmails();
     clearInvitationLink(); $('#invitation-list').replaceChildren(); $('#invitation-list').setAttribute('aria-busy', 'false'); $('#invitation-form').reset(); $('#invitation-fields').disabled = false; $('#refresh-invitations').disabled = false;
     $('#create-invitation .button-label').textContent = 'Create invitation';
     $('#session-identity').textContent = ''; $('#session-identity').hidden = true; $('#access-nav').hidden = true; $('#access-panel').hidden = true;
@@ -144,7 +147,9 @@
   }
   function switchPanel(panel, focus = false, kind = state.activeKind) {
     if (panel === 'access' && !state.session?.canManageAccess) return;
+    if (panel === 'emails' && (!state.session?.authenticated || state.session.role === 'bootstrap')) return;
     if (state.activePanel === 'access' && panel !== 'access') { clearInvitationLink(); state.pendingRevokeId = null; state.pendingRemoveId = null; renderInvitations(); renderMembers(); message('#invitation-message', ''); message('#members-message', ''); }
+    if (state.activePanel === 'emails' && panel !== 'emails') { state.pendingEmailRetryId = null; state.pendingEmailDisconnect = false; renderEmailHistory(); renderEmailControls(); }
     state.activePanel = panel;
     if (panel === 'bookings') state.activeKind = kind === 'estimate' ? 'estimate' : 'service';
     document.querySelectorAll('.workspace-panel').forEach(element => { element.hidden = element.id !== `${panel}-panel`; });
@@ -154,6 +159,7 @@
     if (panel === 'calendar') refreshSession();
     if (panel === 'bookings') loadBookings(true);
     if (panel === 'access') { refreshSession(); loadInvitations(); loadMembers(); }
+    if (panel === 'emails') { refreshSession(); loadEmails(); }
   }
   function formatDate(value, timeOnly = false) {
     const date = new Date(value);
@@ -378,6 +384,154 @@
     Object.assign(settings, timeOffSettings(blocks));
     return settings;
   }
+  const emailStatuses = { queued: 'Queued', sending: 'Sending', sent: 'Sent via Gmail', failed: 'Needs attention', uncertain: 'Delivery unconfirmed', skipped: 'Skipped' };
+  const emailKinds = { receipt: 'Request received', confirmation: 'Confirmation', reschedule: 'Time changed', cancellation: 'Cancellation', reminder: 'Appointment reminder', test: 'Test email' };
+  const reminderHours = [1, 2, 6, 12, 24, 48];
+  function emailAllowed() { return Boolean(state.session?.authenticated && state.session.role !== 'bootstrap'); }
+  function validEmailSettings(settings) { return settings && typeof settings.enabled === 'boolean' && typeof settings.remindersEnabled === 'boolean' && reminderHours.includes(settings.reminderHours); }
+  function resetEmails() {
+    state.email = null; state.emailRevision++; state.loadingEmails = false; state.emailBusy = ''; state.emailDirty = false; state.pendingEmailRetryId = null; state.pendingEmailDisconnect = false;
+    $('#email-settings-form').reset(); $('#email-enabled').checked = false; $('#email-reminders').checked = false; $('#email-reminder-hours').value = '24';
+    $('#email-history').replaceChildren(); $('#email-history').setAttribute('aria-busy', 'false'); $('#email-sender').textContent = ''; $('#email-sender').hidden = true; $('#email-test-help').textContent = '';
+    $('#email-connection-title').textContent = 'A familiar sender.'; $('#email-connection-description').textContent = 'Loading the shared email connection…'; $('#email-connection-badge').textContent = 'Checking sender';
+    $('#email-settings-state').textContent = ''; $('#email-automation-state').textContent = ''; message('#email-connection-error', ''); message('#emails-message', ''); renderEmailControls();
+  }
+  function renderEmailControls() {
+    const connection = state.email?.connection; const ready = Boolean(emailAllowed() && state.email); const busy = Boolean(state.emailBusy);
+    $('#refresh-emails').disabled = busy || state.loadingEmails;
+    $('#email-settings-fields').disabled = !ready || busy; $('#save-email-settings').disabled = !ready || busy || !state.emailDirty; $('#reset-email-settings').disabled = !ready || busy || !state.emailDirty;
+    $('#email-reminder-hours').disabled = !ready || busy || !$('#email-reminders').checked;
+    $('#connect-email').hidden = !ready || !connection?.canConnect || (connection.connected && !connection.error);
+    $('#connect-email').disabled = busy || state.connecting || state.configuring || state.disconnecting;
+    $('#connect-email .button-label').textContent = state.emailBusy === 'connect' ? 'Opening Google…' : connection?.connected ? 'Reconnect Gmail' : 'Connect Gmail';
+    $('#disconnect-email').hidden = !ready || !connection?.canConnect || !connection.connected;
+    $('#disconnect-email').disabled = busy; $('#send-test-email').disabled = !ready || !connection?.connected || Boolean(connection.error) || busy;
+    $('#send-test-email').textContent = state.emailBusy === 'test' ? 'Queuing test…' : 'Send test email';
+    $('#email-disconnect-confirmation').hidden = !state.pendingEmailDisconnect || !ready || !connection?.canConnect || !connection.connected;
+    $('#confirm-email-disconnect').disabled = busy; $('#keep-email-connection').disabled = busy;
+    $('#confirm-email-disconnect').textContent = state.emailBusy === 'disconnect' ? 'Disconnecting…' : 'Disconnect sender';
+    $('#save-email-settings').textContent = state.emailBusy === 'settings' ? 'Saving…' : 'Save email preferences';
+    $('#email-history').setAttribute('aria-busy', String(busy));
+  }
+  function renderEmailSettings() {
+    if (!state.email || state.emailDirty) return;
+    const settings = state.email.settings;
+    $('#email-enabled').checked = settings.enabled; $('#email-reminders').checked = settings.remindersEnabled; $('#email-reminder-hours').value = String(settings.reminderHours);
+    $('#email-settings-state').textContent = settings.enabled ? 'Automatic emails enabled' : 'Automatic emails off';
+  }
+  function renderEmails() {
+    if (!state.email || !emailAllowed()) { renderEmailControls(); return; }
+    const { connection, settings } = state.email; const needsAttention = Boolean(connection.error);
+    $('#email-connection-badge').textContent = needsAttention ? 'Needs attention' : connection.connected ? 'Connected' : 'Not connected';
+    $('#email-connection-badge').className = `badge ${connection.connected && !needsAttention ? 'success' : 'warning'}`;
+    $('#email-connection-title').textContent = needsAttention ? 'The sender needs attention.' : connection.connected ? 'Your Gmail sender is connected.' : 'Connect a familiar sender.';
+    $('#email-connection-description').textContent = connection.connected ? 'Customer emails use this shared sender. Gmail permission is separate from Calendar and does not include reading your inbox.' : connection.canConnect ? 'Connect Gmail once using the same Google account as the shared calendar. Then enable automatic emails below when you are ready.' : 'The shared calendar account holder can connect Gmail here. Everyone can manage email preferences and see recent messages after setup.';
+    $('#email-sender').textContent = connection.email ? `Sender: ${connection.email}` : ''; $('#email-sender').hidden = !connection.email;
+    $('#email-test-help').textContent = connection.connected && connection.email ? `The test goes only to ${connection.email}, the connected sender. No customer is emailed.` : 'A test is available after the shared sender is connected.';
+    message('#email-connection-error', connection.error || '', 'error');
+    $('#email-automation-state').textContent = !settings.enabled ? 'Automatic emails are off. You can still send a test to the connected sender.' : !connection.connected || needsAttention ? 'Automatic emails are enabled, but the sender needs attention before sending can resume.' : settings.remindersEnabled ? `New requests and future status changes receive email updates, with one reminder ${settings.reminderHours} ${settings.reminderHours === 1 ? 'hour' : 'hours'} before a confirmed appointment.` : 'New requests and future status changes receive email updates. Appointment reminders are off.';
+    renderEmailSettings(); renderEmailControls(); renderEmailHistory();
+  }
+  function renderEmailHistory(focusId = '', focusAction = '') {
+    const fragment = document.createDocumentFragment(); let focusTarget = null;
+    if (!focusId && document.activeElement?.dataset?.emailId) { focusId = document.activeElement.dataset.emailId; focusAction = document.activeElement.dataset.emailAction; }
+    const items = state.email?.history || [];
+    if (!items.length) fragment.append(node('p', 'empty-state', 'No emails yet. Sent messages, upcoming reminders and delivery issues will appear here.'));
+    items.forEach(item => {
+      const row = node('article', 'email-row'); const details = node('div', 'email-details'); const title = node('h3', '', item.subject || emailKinds[item.kind] || 'Appointment email'); title.tabIndex = -1;
+      title.dataset.emailId = item.id; title.dataset.emailAction = 'heading'; if (item.id === focusId && focusAction === 'heading') focusTarget = title;
+      details.append(title, node('p', 'small muted', `To ${item.to}`), node('p', 'small muted', emailKinds[item.kind] || 'Appointment update'));
+      const when = item.sentAt ? `Sent ${formatDate(item.sentAt)}` : item.status === 'queued' && item.scheduledAt ? `Scheduled ${formatDate(item.scheduledAt)}` : `Created ${formatDate(item.createdAt)}`;
+      details.append(node('p', 'small muted', when));
+      if (item.error) details.append(node('p', 'email-error small', item.error));
+      row.append(details, badge(emailStatuses[item.status], item.status === 'sent' ? 'success' : ['failed', 'uncertain'].includes(item.status) ? 'warning' : 'neutral'));
+      function action(label, style, actionName, handler) {
+        const button = node('button', style, label); button.type = 'button'; button.disabled = Boolean(state.emailBusy) || !state.email?.connection.connected || Boolean(state.email?.connection.error);
+        button.dataset.emailId = item.id; button.dataset.emailAction = actionName; button.addEventListener('click', handler);
+        if (item.id === focusId && actionName === focusAction) focusTarget = button;
+        return button;
+      }
+      if (item.status === 'uncertain' && state.pendingEmailRetryId === item.id) {
+        const confirmation = node('div', 'email-confirmation'); confirmation.setAttribute('role', 'group'); confirmation.setAttribute('aria-label', `Retry email to ${item.to}`);
+        const actions = node('div', 'invitation-confirm-actions');
+        actions.append(action('Send again anyway', 'button button-danger', 'confirm', () => retryEmail(item)), action('Keep as is', 'button button-secondary', 'keep', () => { if (state.emailBusy) return; state.pendingEmailRetryId = null; renderEmailHistory(item.id, 'retry'); }));
+        confirmation.append(node('p', 'small muted', 'Gmail did not confirm the result. This email may already have been sent. Check Gmail first: retrying could send the customer a duplicate.'), actions); row.append(confirmation);
+      } else if (['failed', 'uncertain'].includes(item.status)) {
+        const retry = action(item.status === 'uncertain' ? 'Review retry' : 'Retry', 'button button-secondary', 'retry', () => { if (state.emailBusy || !emailAllowed()) return; if (item.status === 'uncertain') { state.pendingEmailRetryId = item.id; renderEmailHistory(item.id, 'keep'); } else retryEmail(item); });
+        retry.setAttribute('aria-label', `${item.status === 'uncertain' ? 'Review retry' : 'Retry email'} to ${item.to}`); row.append(retry);
+      } else if (item.id === focusId) focusTarget = title;
+      if (item.id === focusId && focusTarget?.disabled) focusTarget = title;
+      fragment.append(row);
+    });
+    $('#email-history').replaceChildren(fragment);
+    if (state.activePanel === 'emails' && focusTarget && !focusTarget.disabled) focusTarget.focus();
+  }
+  async function loadEmails() {
+    if (!emailAllowed() || state.loadingEmails || state.emailBusy) return false;
+    const epoch = state.sessionEpoch; const revision = state.emailRevision; state.loadingEmails = true; renderEmailControls();
+    try {
+      const data = await api('/api/admin/email');
+      if (epoch !== state.sessionEpoch || revision !== state.emailRevision || !emailAllowed()) return false;
+      if (!validEmailSettings(data?.settings) || typeof data?.connection?.connected !== 'boolean' || typeof data.connection.canConnect !== 'boolean' || (data.connection.email !== undefined && typeof data.connection.email !== 'string') || (data.connection.error !== undefined && typeof data.connection.error !== 'string') || !Array.isArray(data.history) || data.history.some(item => !item || typeof item.id !== 'string' || typeof item.to !== 'string' || typeof item.subject !== 'string' || typeof item.kind !== 'string' || !Object.hasOwn(emailStatuses, item.status) || (item.error !== undefined && typeof item.error !== 'string'))) throw new APIError('Email settings and history could not be read. Refresh to try again.');
+      state.email = data;
+      if (!data.history.some(item => item.id === state.pendingEmailRetryId && item.status === 'uncertain')) state.pendingEmailRetryId = null;
+      if (!data.connection.canConnect || !data.connection.connected) state.pendingEmailDisconnect = false;
+      renderEmails(); return true;
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.emailRevision && emailAllowed()) message('#emails-message', error.message, 'error'); return false; }
+    finally { if (epoch === state.sessionEpoch && revision === state.emailRevision && emailAllowed()) { state.loadingEmails = false; renderEmailControls(); } }
+  }
+  function markEmailDirty() { if (!state.email || !emailAllowed() || state.emailBusy) return; state.emailDirty = true; $('#email-settings-state').textContent = 'Unsaved email preferences'; message('#emails-message', ''); renderEmailControls(); }
+  async function saveEmailSettings(event) {
+    event.preventDefault(); if (!emailAllowed() || !state.email || state.emailBusy || !state.emailDirty) return;
+    const settings = { enabled: $('#email-enabled').checked, remindersEnabled: $('#email-reminders').checked, reminderHours: Number($('#email-reminder-hours').value) };
+    if (!validEmailSettings(settings)) { message('#emails-message', 'Choose a reminder time from the list.', 'error'); return; }
+    const epoch = state.sessionEpoch; const revision = ++state.emailRevision; state.loadingEmails = false; state.emailBusy = 'settings'; renderEmailControls(); message('#emails-message', '');
+    try {
+      const data = await api('/api/admin/email/settings', { method: 'PUT', body: settings });
+      if (epoch !== state.sessionEpoch || revision !== state.emailRevision || !emailAllowed()) return;
+      if (!validEmailSettings(data?.settings)) throw new APIError('Preferences may have saved, but the result could not be checked. Refresh before trying again.');
+      state.email.settings = data.settings; state.emailDirty = false; renderEmails(); message('#emails-message', 'Email preferences saved. Enabling does not email existing appointments.', 'success');
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.emailRevision && emailAllowed()) message('#emails-message', error.message, 'error'); }
+    finally { if (epoch === state.sessionEpoch && revision === state.emailRevision && emailAllowed()) { state.emailBusy = ''; renderEmailControls(); } }
+  }
+  async function connectEmail() {
+    if (!emailAllowed() || !state.email?.connection.canConnect || state.emailBusy || state.connecting || state.configuring || state.disconnecting) return;
+    if (state.emailDirty) { message('#emails-message', 'Save or discard your email preferences before connecting Gmail.', 'error'); return; }
+    const epoch = state.sessionEpoch; const revision = ++state.emailRevision; state.loadingEmails = false; state.emailBusy = 'connect'; renderEmailControls(); message('#emails-message', '');
+    try {
+      const data = await api('/api/admin/email/connect', { method: 'POST', body: {} });
+      if (epoch !== state.sessionEpoch || revision !== state.emailRevision || !emailAllowed()) return;
+      const url = new URL(data?.url); if (url.protocol !== 'https:' || url.hostname !== 'accounts.google.com') throw new APIError('Gmail permission could not be opened. Please try again.');
+      window.location.assign(url.href);
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.emailRevision && emailAllowed()) { state.emailBusy = ''; renderEmailControls(); message('#emails-message', error instanceof TypeError ? 'Gmail permission could not be opened. Please try again.' : error.message, 'error'); } }
+  }
+  async function emailCommand(action, item = null) {
+    if (!emailAllowed() || !state.email || state.emailBusy || !state.email.connection.connected) return;
+    if (action === 'disconnect' && (!state.email.connection.canConnect || !state.pendingEmailDisconnect)) return;
+    if (action !== 'disconnect' && state.email.connection.error) return;
+    if (action === 'retry' && (!item || !state.email.history.some(saved => saved.id === item.id && saved.status === item.status && ['failed', 'uncertain'].includes(saved.status)) || (item.status === 'uncertain' && state.pendingEmailRetryId !== item.id))) return;
+    const epoch = state.sessionEpoch; const revision = ++state.emailRevision; state.loadingEmails = false; state.emailBusy = action; renderEmailControls(); renderEmailHistory(); message('#emails-message', '');
+    let completed = false;
+    try {
+      const path = action === 'retry' ? `/api/admin/email/messages/${encodeURIComponent(item.id)}/retry` : `/api/admin/email/${action}`;
+      await api(path, { method: 'POST', body: action === 'retry' && item.status === 'uncertain' ? { confirmUncertain: true } : {} });
+      if (epoch !== state.sessionEpoch || revision !== state.emailRevision || !emailAllowed()) return;
+      completed = true; state.pendingEmailRetryId = null; state.pendingEmailDisconnect = false;
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.emailRevision && emailAllowed()) message('#emails-message', error.message, 'error'); }
+    finally {
+      if (epoch === state.sessionEpoch && revision === state.emailRevision && emailAllowed()) {
+        const restoreEmailFocus = action === 'retry' && state.activePanel === 'emails' && document.activeElement?.dataset?.emailId === item.id;
+        state.emailBusy = ''; renderEmailControls(); renderEmailHistory();
+        if (completed) {
+          const refreshed = await loadEmails();
+          if (epoch !== state.sessionEpoch || revision !== state.emailRevision || !emailAllowed()) return;
+          if (refreshed) message('#emails-message', action === 'disconnect' ? 'Email sender disconnected. Your shared Calendar and appointments are unchanged.' : action === 'test' ? 'Test queued for the connected sender only. Check the history below for the result.' : 'Email queued for another attempt. Check its status below.', 'success');
+          if (restoreEmailFocus && state.activePanel === 'emails' && document.activeElement?.dataset?.emailId === item.id) renderEmailHistory(item.id, 'heading');
+        } else if (restoreEmailFocus) renderEmailHistory(item.id, item.status === 'uncertain' ? 'keep' : 'retry');
+      }
+    }
+  }
+  function retryEmail(item) { return emailCommand('retry', item); }
   function clearInvitationLink() {
     state.invitationLink = null; $('#invitation-link').value = ''; $('#invitation-result-description').textContent = ''; $('#invitation-result').hidden = true;
   }
@@ -589,6 +743,11 @@
       const outcomes = { denied: 'Google sign-in was cancelled. Try again, or reopen the private link if you were accepting an invitation.', failed: 'Google could not complete this request. Try signing in again, or reopen your private invitation link to accept it.', wrong_account: 'That Google account does not have access for this request. Use your approved account. If you were accepting an invitation, reopen its private link and choose the exact invited email.', invalid_invitation: 'This invitation is not valid. Ask the operator for a new private link.', invitation_expired: 'This invitation has expired. Ask the operator for a new private link.', invitation_revoked: 'This invitation has been revoked. Ask the operator for a new private link.', invitation_used: 'This invitation has already been accepted. Sign in with your approved Google account.', member_already_exists: 'This Google account already has access to the shared workspace. Sign in with Google to continue; you do not need another invitation.', missing_scopes: 'Google Calendar permissions were not completed. Connect again and allow the requested calendar access.', configuration_required: 'Google sign-in needs a one-time setup on this installation. Ask the person who set up this portal to finish the private Google connection settings, then try again.' };
       if (outcomes[oauthOutcome]) message('#page-message', outcomes[oauthOutcome], oauthOutcome === 'denied' ? '' : 'error');
       if (['connected', 'missing_scopes', 'configuration_required'].includes(oauthOutcome) && state.session?.authenticated) switchPanel('calendar');
+      const emailOutcomes = { gmail_connected: 'Gmail sender connected. Review your email preferences below; connecting does not email existing customers.', gmail_denied: 'Gmail permission was cancelled. Your Calendar connection has not changed.', gmail_failed: 'Gmail could not connect. Try again from the Emails tab.', gmail_wrong_account: 'Use the Google account assigned to the shared calendar to connect the email sender.', gmail_missing_scopes: 'Gmail send permission was not completed. Connect again and allow sending email.', gmail_configuration_required: 'The Gmail connection needs application setup from the person who manages this installation.' };
+      if (Object.hasOwn(emailOutcomes, oauthOutcome || '')) {
+        if (emailAllowed()) switchPanel('emails');
+        message(emailAllowed() ? '#emails-message' : '#page-message', emailOutcomes[oauthOutcome], oauthOutcome === 'gmail_connected' ? 'success' : oauthOutcome === 'gmail_denied' ? '' : 'error');
+      }
       if (oauthOutcome === 'invited' && state.session?.authenticated) message('#page-message', 'Welcome to the shared workspace. You can now manage the same appointments, callbacks and availability.', 'success');
     } catch (error) { if (epoch === state.sessionEpoch) { showSignedOut(); message('#page-message', error.message, 'error'); } }
     finally { if (epoch === state.sessionEpoch || !state.session?.authenticated) $('#loading-view').hidden = true; }
@@ -604,6 +763,7 @@
         if (state.activePanel === 'bookings') await loadBookings(true);
         if (state.activePanel === 'access' && !$('#invitation-list').contains(document.activeElement)) await loadInvitations();
         if (state.activePanel === 'access' && !$('#member-list').contains(document.activeElement)) await loadMembers();
+        if (state.activePanel === 'emails' && !$('#email-history').contains(document.activeElement)) await loadEmails();
       }
       if (epoch === state.sessionEpoch) schedulePoll();
     }, 60000);
@@ -614,6 +774,7 @@
     if (state.activePanel === 'bookings') loadBookings(true);
     if (state.activePanel === 'access' && !$('#invitation-list').contains(document.activeElement)) loadInvitations();
     if (state.activePanel === 'access' && !$('#member-list').contains(document.activeElement)) loadMembers();
+    if (state.activePanel === 'emails' && !$('#email-history').contains(document.activeElement)) loadEmails();
     schedulePoll();
   }
   document.querySelectorAll('[data-panel]').forEach(button => button.addEventListener('click', () => switchPanel(button.dataset.panel, true, button.dataset.kind)));
@@ -621,6 +782,15 @@
   $('#invitation-form').addEventListener('submit', createInvitation);
   $('#refresh-invitations').addEventListener('click', loadInvitations);
   $('#refresh-members').addEventListener('click', loadMembers);
+  $('#refresh-emails').addEventListener('click', async () => { if (state.emailBusy || state.loadingEmails) return; message('#emails-message', ''); await loadEmails(); });
+  $('#email-settings-form').addEventListener('input', markEmailDirty); $('#email-settings-form').addEventListener('change', markEmailDirty);
+  $('#email-settings-form').addEventListener('submit', saveEmailSettings);
+  $('#reset-email-settings').addEventListener('click', () => { if (state.emailBusy || !state.email) return; state.emailDirty = false; renderEmailSettings(); renderEmailControls(); message('#emails-message', 'Email preferences restored to the saved settings.'); });
+  $('#connect-email').addEventListener('click', connectEmail);
+  $('#send-test-email').addEventListener('click', () => emailCommand('test'));
+  $('#disconnect-email').addEventListener('click', () => { if (!emailAllowed() || state.emailBusy || !state.email?.connection.canConnect || !state.email.connection.connected) return; state.pendingEmailDisconnect = true; renderEmailControls(); $('#keep-email-connection').focus(); });
+  $('#keep-email-connection').addEventListener('click', () => { if (state.emailBusy) return; state.pendingEmailDisconnect = false; renderEmailControls(); $('#disconnect-email').focus(); });
+  $('#confirm-email-disconnect').addEventListener('click', async () => { await emailCommand('disconnect'); if (state.activePanel === 'emails' && emailAllowed() && !state.email?.connection.connected) $('#email-connection-title').focus(); });
   $('#hide-invitation').addEventListener('click', () => { clearInvitationLink(); message('#invitation-message', 'Private link hidden.'); $('#invitation-email').focus(); });
   $('#copy-invitation').addEventListener('click', async () => {
     const link = state.invitationLink; const epoch = state.sessionEpoch;
@@ -701,22 +871,22 @@
   });
   $('#disconnect-google').addEventListener('click', async () => {
     if (state.disconnecting || state.configuring || state.connecting || !state.session?.canConnectCalendar) return;
-    if (!window.confirm('Disconnect Google Calendar? Online times will be unavailable until you reconnect. Existing calendar events will remain.')) return;
+    if (!window.confirm('Disconnect Google Calendar? Online times and automatic emails will stop until reconnected. This revokes this application’s Google permissions, including its Gmail sender. Existing appointments and calendar events remain.')) return;
     const epoch = state.sessionEpoch;
     invalidateSessionRefresh(); state.disconnecting = true; $('#disconnect-google').disabled = true;
-    try { await api('/api/admin/google/disconnect', { method: 'POST', body: {} }); if (epoch !== state.sessionEpoch) return; const session = await api('/api/admin/session'); if (epoch !== state.sessionEpoch) return; if (!session?.authenticated) { showSignedOut(); return; } state.session = session; state.csrf = session.csrfToken || ''; state.disconnecting = false; renderConnection(); message('#calendar-message', 'Google Calendar disconnected. Online booking is unavailable until you reconnect.'); }
+    try { await api('/api/admin/google/disconnect', { method: 'POST', body: {} }); if (epoch !== state.sessionEpoch) return; const session = await api('/api/admin/session'); if (epoch !== state.sessionEpoch) return; if (!session?.authenticated) { showSignedOut(); return; } state.session = session; state.csrf = session.csrfToken || ''; state.disconnecting = false; renderConnection(); if (state.email) loadEmails(); message('#calendar-message', 'Google Calendar and email sending disconnected. Reconnect Calendar for online booking and Gmail separately for customer emails.'); }
     catch (error) { if (epoch === state.sessionEpoch) { state.disconnecting = false; renderConnection(); message('#calendar-message', error.message, 'error'); } }
     finally { if (epoch === state.sessionEpoch) { state.disconnecting = false; $('#disconnect-google').disabled = false; } }
   });
   $('#logout').addEventListener('click', async () => {
-    if (state.dirty && !window.confirm('Sign out and discard your unsaved availability changes?')) return;
+    if ((state.dirty || state.emailDirty) && !window.confirm('Sign out and discard your unsaved preferences?')) return;
     const epoch = state.sessionEpoch;
     $('#logout').disabled = true;
     try { await api('/api/admin/logout', { method: 'POST', body: {} }); if (epoch === state.sessionEpoch) showSignedOut(); }
     catch (error) { if (epoch === state.sessionEpoch) message('#page-message', error.message, 'error'); }
     finally { if (epoch === state.sessionEpoch) $('#logout').disabled = false; }
   });
-  window.addEventListener('beforeunload', event => { if (state.dirty && state.session?.authenticated) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', event => { if ((state.dirty || state.emailDirty) && state.session?.authenticated) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => { invitationToken = null; bootstrapToken = null; showSignedOut(); });
   window.addEventListener('pageshow', event => { if (event.persisted) { showSignedOut(); start(); } });
   window.addEventListener('focus', refreshVisibleBookings);

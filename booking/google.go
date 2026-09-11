@@ -455,7 +455,7 @@ func (g *Google) Sync(ctx context.Context, b Booking) error {
 			}
 			zone = metadata.TimeZone
 		}
-		return g.store.applyCalendarSnapshot(ctx, []googleEvent{existing}, calendarCursor{TimeZone: zone}, false)
+		return g.store.applyCalendarSnapshot(ctx, []googleEvent{existing}, calendarCursor{TimeZone: zone}, false, g.now())
 	}
 	if status != 404 {
 		return errGoogle
@@ -508,6 +508,12 @@ func (g *Google) disconnect(ctx context.Context) error {
 	defer g.mu.Unlock()
 	var tokens GoogleTokens
 	_ = g.store.getSecret("google_tokens", &tokens)
+	if err := g.store.disableEmailNotifications(); err != nil {
+		return err
+	}
+	if err := g.store.dropMailGrant(); err != nil {
+		return err
+	}
 	// Clear local access even when Google's revocation endpoint is temporarily down.
 	if _, err := g.store.db.Exec("DELETE FROM secrets WHERE key='google_tokens'"); err != nil {
 		return err

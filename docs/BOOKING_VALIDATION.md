@@ -2,6 +2,37 @@
 
 Validation date: September 10, 2026. The original sections below concern the local booking extension on `dev`. The separate manual-server verification is recorded below; it does not replace or deploy the existing demo/main environment.
 
+## Customer email controls — September 11, local validation
+
+The `dev` source adds an **Emails** panel for the shared Gmail sender, automatic customer updates and a single configurable reminder. These results cover local checks; live release evidence is recorded separately.
+
+`scripts/test-admin-email.cjs` passed all **16** checks against the actual admin controller and an isolated in-memory DOM/API fixture. It makes no network calls and never sends a message. The existing **27** admin access checks and admin refresh suite also passed after integration; JavaScript syntax and scoped whitespace checks passed.
+
+| Check | Verified behavior |
+|---|---|
+| Shared settings and defaults | Loads sender/preferences with automatic emails off, reminders on and a 24-hour lead time; no implicit send. |
+| Account permissions | Only the Calendar identity can connect/disconnect Gmail; other owners can manage shared preferences. |
+| Separate Gmail consent | Uses the Gmail endpoint and accepts only an HTTPS Google authorization redirect; Calendar connection is not started. |
+| OAuth return routing | All six Gmail outcomes return to Emails without starting another connection. |
+| Reminder preferences and drafts | Supports 1, 2, 6, 12, 24 and 48 hours; rejects another value; refreshing preserves unsaved settings. |
+| Connect with unsaved changes | Requires saving or discarding email preferences before a Gmail redirect. |
+| Sender-only test | An explicit action queues a test without accepting a recipient from the UI; it describes queuing rather than guaranteed delivery. |
+| History and plain-text rendering | Distinguishes queued, sending, sent via Gmail, failed, uncertain and skipped; subjects render as text. |
+| Uncertain retry | Requires a separate duplicate-risk confirmation, initially focuses **Keep as is**, and sends the explicit uncertainty acknowledgment only after confirmation. |
+| Failed retry | Uses ordinary retry without an uncertainty override; queued or completed messages cannot be retried. |
+| Sender disconnection | Requires inline confirmation, updates email preferences and preserves the Calendar session state. |
+| Leaving Emails | Cancels pending retry/disconnect confirmations without submitting them. |
+| Overlapping responses | A slow load cannot overwrite saved preferences; repeated clicks cannot duplicate a save. |
+| Sign-out cleanup | Clears sender/history/drafts/pending actions and ignores late responses containing private data. |
+| Removed or setup identities | A 401 clears the workspace; anonymous and bootstrap sessions cannot use email controls. |
+| Failure recovery | Failed saves preserve editable drafts; malformed response data receives a safe error instead of being rendered. |
+
+The public request pages say customers **may** receive request emails and a reminder; they do not promise sending when the feature is disabled. A receipt remains distinct from an appointment confirmation. Admin copy says enabling does not email existing appointments, that new requests and later status changes can trigger emails, and that a reminder requires confirmation before its selected lead time. The history explicitly distinguishes Gmail accepting a message from final inbox delivery.
+
+The standard PowerShell check passed, including both packaged containers, the complete Go race suite (46.859 seconds), and isolated bootstrap/session/CSRF/persistence/admin-route checks. Backend cases cover atomic booking/outbox writes, idempotency, competing workers, restart recovery, one reminder, Calendar reschedules/cancellations, temporary Calendar failures, no historical backfill, bounded retry, ambiguous sends and private sender-only testing. Provider cases verify MIME/header safety, exact account binding, send-only scope, separate token refresh, OAuth replay/binding, stale consent, disconnect behavior and error classes. Tests use synthetic records and mocked Google endpoints.
+
+The local owner portal was checked in the browser at desktop and 390-pixel mobile widths. Connection controls, sender address, reminder selector, save bar and email history fit without page overflow (375-pixel document width inside the 390-pixel viewport). Existing local Calendar/settings remained intact. Google Cloud now has Gmail API enabled and only `gmail.send` added to the existing scopes; the sensitive scope is not yet Google-verified. Hosted Gmail consent, a sender-only test and dev release verification follow the source checks. Main/production remain outside this release.
+
 ## Shared workspace owners — September 10
 
 - The operator can invite multiple owners to the same bookings, estimates and availability. Independent recipients' invitations coexist; replacements affect only the same email. Joining never assigns Calendar ownership. The first approved person to explicitly connect Calendar establishes the shared account.

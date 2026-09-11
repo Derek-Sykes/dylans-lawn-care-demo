@@ -295,8 +295,14 @@ func (a *App) createBooking(ctx context.Context, in BookingInput) (Booking, bool
 	buffer := time.Duration(v.BufferMinutes) * time.Minute
 	id := bookingID()
 	now := a.now().UTC()
-	_, err = a.store.db.ExecContext(ctx, `INSERT INTO bookings(id,idempotency_key,payload_hash,start,end,blocked_end,service_id,name,email,phone,address,notes,created_at,event_id,kind) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, a.store.hash(in.IdempotencyKey), hash, start.Unix(), selected.End.Unix(), selected.End.Add(buffer).Unix(), in.ServiceID, in.Name, in.Email, in.Phone, in.Address, in.Notes, now.Unix(), "d"+id, in.Kind)
+	tx, err := a.store.db.BeginTx(ctx, nil)
 	if err != nil {
+		return Booking{}, false, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO bookings(id,idempotency_key,payload_hash,start,end,blocked_end,service_id,name,email,phone,address,notes,created_at,event_id,kind) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, a.store.hash(in.IdempotencyKey), hash, start.Unix(), selected.End.Unix(), selected.End.Add(buffer).Unix(), in.ServiceID, in.Name, in.Email, in.Phone, in.Address, in.Notes, now.Unix(), "d"+id, in.Kind)
+	if err != nil {
+		_ = tx.Rollback()
 		if existing, e := a.store.byIdempotency(in.IdempotencyKey); e == nil {
 			if existing.PayloadHash == hash {
 				return existing, false, nil
@@ -308,7 +314,16 @@ func (a *App) createBooking(ctx context.Context, in BookingInput) (Booking, bool
 		}
 		return Booking{}, false, err
 	}
-	b, err := a.store.booking(id)
+	b, err := scanBooking(tx.QueryRow("SELECT "+bookingColumns+" FROM bookings WHERE id=?", id))
+	if err == nil {
+		err = a.store.queueBookingEmailTx(tx, Booking{}, b, now)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		return Booking{}, false, err
+	}
 	a.wakeWorker()
 	return b, true, err
 }
@@ -353,6 +368,13 @@ func (a *App) patchBooking(id string, status, notes *string) (Booking, error) {
 			return Booking{}, err
 		}
 	}
+	after, err := scanBooking(tx.QueryRow("SELECT "+bookingColumns+" FROM bookings WHERE id=?", id))
+	if err != nil {
+		return Booking{}, err
+	}
+	if err = a.store.queueBookingEmailTx(tx, b, after, a.now()); err != nil {
+		return Booking{}, err
+	}
 	if err = tx.Commit(); err != nil {
 		return Booking{}, err
 	}
@@ -378,6 +400,7 @@ func (a *App) worker(ctx context.Context) {
 		}
 		a.syncDue(ctx)
 		_ = a.refreshCalendar(ctx, false)
+		a.sendEmailDue(ctx)
 		a.store.cleanup(a.now())
 	}
 }

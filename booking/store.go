@@ -142,6 +142,16 @@ CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY,value BLOB NOT NULL,exp
 CREATE TABLE IF NOT EXISTS oauth_states (id TEXT PRIMARY KEY,binding TEXT NOT NULL,value BLOB NOT NULL,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY,token_hash TEXT NOT NULL UNIQUE,email TEXT NOT NULL,expires INTEGER NOT NULL,created INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','used','revoked')),used_sub TEXT NOT NULL DEFAULT '',issuer_sub TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS workspace_members (id TEXT PRIMARY KEY,google_sub TEXT NOT NULL UNIQUE,email TEXT NOT NULL UNIQUE,session_version TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked')),created INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS email_booking_state (booking_id TEXT PRIMARY KEY,version INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS email_outbox (
+ id TEXT PRIMARY KEY,dedupe_key TEXT NOT NULL UNIQUE,booking_id TEXT NOT NULL DEFAULT '',version INTEGER NOT NULL DEFAULT 0,
+ kind TEXT NOT NULL,recipient TEXT NOT NULL,subject TEXT NOT NULL,body TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','sending','sent','failed','uncertain','skipped')),
+ error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL,scheduled INTEGER NOT NULL,sent INTEGER NOT NULL DEFAULT 0,
+ attempts INTEGER NOT NULL DEFAULT 0,next_attempt INTEGER NOT NULL DEFAULT 0,attempt_started INTEGER NOT NULL DEFAULT 0,
+ provider_id TEXT NOT NULL DEFAULT '',snapshot_start INTEGER NOT NULL DEFAULT 0,snapshot_end INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS email_due ON email_outbox(status,scheduled,next_attempt);
+CREATE INDEX IF NOT EXISTS email_booking ON email_outbox(booking_id,version);
 CREATE TABLE IF NOT EXISTS bookings (
  id TEXT PRIMARY KEY,idempotency_key TEXT NOT NULL UNIQUE,payload_hash TEXT NOT NULL,
  start INTEGER NOT NULL,end INTEGER NOT NULL,blocked_end INTEGER NOT NULL,
@@ -252,4 +262,7 @@ func (s *Store) close() error { return s.db.Close() }
 func (s *Store) cleanup(now time.Time) {
 	_, _ = s.db.Exec("DELETE FROM sessions WHERE expires<?", now.Unix())
 	_, _ = s.db.Exec("DELETE FROM oauth_states WHERE expires<?", now.Unix())
+	// Keep recent email history without retaining another permanent copy of
+	// customer details. Unresolved failures remain available for manual review.
+	_, _ = s.db.Exec("DELETE FROM email_outbox WHERE status IN ('sent','skipped') AND created<?", now.AddDate(0, 0, -180).Unix())
 }
