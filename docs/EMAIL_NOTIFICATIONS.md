@@ -5,7 +5,7 @@ Appointment emails use the assigned Calendar account's Gmail. The workspace's ex
 ## Set up the sender
 
 1. Sign into the admin workspace. For a fresh workspace, the intended calendar account holder chooses **Connect Google** under **Google Calendar** and approves both Calendar permissions and sending email. The application saves the shared calendar connection and email sender together. Ordinary portal sign-in and invitation acceptance request identity permissions only.
-2. Open **Emails**. A new combined connection is already ready here. If an older installation has Calendar connected without Gmail permission, that account holder chooses **Enable Gmail** here or **Reconnect Google** in the Calendar panel and approves the additional permission once.
+2. Open **Emails**. A new combined connection is already ready here. If an older installation has Calendar connected without Gmail permission, that account holder chooses **Enable Gmail** here and approves the additional permission once. **Reconnect Google** appears in the Calendar panel only when Calendar needs attention; that recovery flow also requests both permissions.
 3. Use **Send test email** to send a message to the connected sender account. The test cannot target an arbitrary address and does not email a customer.
 4. Enable **Automatic appointment emails**, choose the reminder preference, and save. Automation starts disabled. The default reminder preference is one reminder 24 hours before a confirmed appointment; the available choices are 1, 2, 6, 12, 24 or 48 hours.
 

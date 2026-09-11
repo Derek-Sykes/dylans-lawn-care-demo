@@ -2,7 +2,7 @@
 
 Validation date: September 10, 2026. The original sections below concern the local booking extension on `dev`. The separate manual-server verification is recorded below; it does not replace or deploy the existing demo/main environment.
 
-## Customer email controls — September 11, local validation
+## Customer email controls — September 11, local and dev validation
 
 The user's final setup clarification combines Calendar and send-only Gmail in one explicit **Connect Google** consent. Ordinary workspace sign-in remains identity-only. Eight focused combined-connection tests passed with race detection (3.114s), covering one callback saving both records atomically, partial consent and wrong-account rejection, legacy Calendar/booking preservation, identity-only sign-in, and rejecting an old refresh token that lacks either required capability. Existing Calendar-only installs retain an **Enable Gmail** upgrade action. The earlier separate-Gmail controls below refer to that upgrade/repair path; a fresh full connection needs only the combined consent.
 
@@ -34,6 +34,16 @@ The `dev` source adds an **Emails** panel for the shared Gmail sender, automatic
 The public request pages say customers **may** receive request emails and a reminder; they do not promise sending when the feature is disabled. A receipt remains distinct from an appointment confirmation. Admin copy says enabling does not email existing appointments, that new requests and later status changes can trigger emails, and that a reminder requires confirmation before its selected lead time. The history explicitly distinguishes Gmail accepting a message from final inbox delivery.
 
 The standard PowerShell check passed, including both packaged containers, the complete Go race suite (46.859 seconds), and isolated bootstrap/session/CSRF/persistence/admin-route checks. Backend cases cover atomic booking/outbox writes, idempotency, competing workers, restart recovery, one reminder, Calendar reschedules/cancellations, temporary Calendar failures, no historical backfill, bounded retry, ambiguous sends and private sender-only testing. Provider cases verify MIME/header safety, exact account binding, send-only scope, separate token refresh, OAuth replay/binding, stale consent, disconnect behavior and error classes. Tests use synthetic records and mocked Google endpoints.
+
+### Deployed email verification
+
+- Application revision `c9e94aa21f4d5e8753af9d536a08cd4d0bb6cf58` passed [source checks](https://github.com/Derek-Sykes/dylans-lawn-care-demo/actions/runs/34628950682) and the [manual dev deployment](https://github.com/Derek-Sykes/dylans-lawn-care-demo/actions/runs/34628962349). The server receipt and both healthy dev containers matched that revision.
+- The registered Google project has Gmail API enabled and declares the send-only Gmail scope. The existing dev Calendar account completed its additional Gmail consent through the real browser flow. A fresh combined connection is covered by the automated tests above; the live account exercised the existing-installation upgrade path.
+- Two explicitly requested sender-only test messages arrived in the connected Gmail inbox: one before the final application update and one after it. Both were recorded as **Sent via Gmail**. No customer was emailed during verification and no existing booking was edited.
+- Automatic customer emails are enabled on the dev installation, with one reminder 24 hours before a confirmed appointment. Reloading after the deployment preserved these settings, the operator session, Calendar and Gmail connections, sent history, shared owner access and both existing service requests. Those requests retained their **Needs contact** status and successful Calendar synchronization; enabling emails did not backfill them.
+- The local packaged installation also restarted successfully with existing runtime data. The updated email panel was visually checked at 390-pixel mobile and 1280-pixel desktop viewports; the mobile page had no horizontal overflow. Temporary viewport overrides were reset.
+- Main remained at `ad5313a07d05f61e829ba6e288a09d433c35505d`; the static demo, company site and shared gateway containers were unchanged. This feature has not been deployed to main.
+- Google still displays its unverified-app notice for this development application's sensitive permissions. Production verification has not been submitted or represented as complete.
 
 The local owner portal was checked in the browser at desktop and 390-pixel mobile widths. Connection controls, sender address, reminder selector, save bar and email history fit without page overflow (375-pixel document width inside the 390-pixel viewport). Existing local Calendar/settings remained intact. Google Cloud now has Gmail API enabled and only `gmail.send` added to the existing scopes; the sensitive scope is not yet Google-verified. Hosted Gmail consent, a sender-only test and dev release verification follow the source checks. Main/production remain outside this release.
 
