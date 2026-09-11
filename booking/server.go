@@ -254,6 +254,8 @@ func (a *App) adminHandler() http.Handler {
 	mux.HandleFunc("POST /api/admin/invitations", a.handleInvitationCreate)
 	mux.HandleFunc("DELETE /api/admin/invitations/{id}", a.handleInvitationRevoke)
 	mux.HandleFunc("POST /api/admin/invitations/accept", a.handleInvitationAccept)
+	mux.HandleFunc("GET /api/admin/members", a.handleMembers)
+	mux.HandleFunc("DELETE /api/admin/members/{id}", a.handleMemberRemove)
 	mux.HandleFunc("POST /api/admin/logout", a.handleLogout)
 	mux.HandleFunc("POST /api/admin/google/connect", a.handleConnect)
 	mux.HandleFunc("POST /api/admin/google/configure", a.handleGoogleConfigure)

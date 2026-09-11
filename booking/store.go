@@ -128,6 +128,10 @@ func openStore(dir, bootstrap string) (*Store, error) {
 		db.Close()
 		return nil, e
 	}
+	if err = s.migrateInvitationOnlyOwner(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -137,6 +141,7 @@ CREATE TABLE IF NOT EXISTS secrets (key TEXT PRIMARY KEY,value BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY,value BLOB NOT NULL,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS oauth_states (id TEXT PRIMARY KEY,binding TEXT NOT NULL,value BLOB NOT NULL,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY,token_hash TEXT NOT NULL UNIQUE,email TEXT NOT NULL,expires INTEGER NOT NULL,created INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','used','revoked')),used_sub TEXT NOT NULL DEFAULT '',issuer_sub TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS workspace_members (id TEXT PRIMARY KEY,google_sub TEXT NOT NULL UNIQUE,email TEXT NOT NULL UNIQUE,session_version TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked')),created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS bookings (
  id TEXT PRIMARY KEY,idempotency_key TEXT NOT NULL UNIQUE,payload_hash TEXT NOT NULL,
  start INTEGER NOT NULL,end INTEGER NOT NULL,blocked_end INTEGER NOT NULL,

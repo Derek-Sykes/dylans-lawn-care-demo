@@ -1,17 +1,22 @@
-# Operator and business-owner access
+# Shared workspace access
 
-The portal has two approved Google identities: an installation operator and an invited business owner. Both can use the appointment lists and availability settings. Only the operator can create or revoke an owner invitation. There is no public admin registration.
+The portal supports an installation operator and multiple invited owners in one shared workspace. Everyone sees the same appointments, estimates, customer details and availability settings. Only the operator can invite people or remove their access. There is no public admin registration, separate workspace per owner, or extra container per person.
 
 ## Normal use
 
 1. The operator opens the admin address and chooses **Sign in with Google**. The installation checks the verified Google identity against its private operator configuration.
-2. In **Access**, the operator enters the owner's Google email address and creates an invitation. It expires after 24 hours. Copy the generated link and send it privately; the application does not send email or messages.
+2. In **Access & invitations**, the operator enters a person's Google email address and creates an invitation. It expires after 24 hours. Copy the generated link and send it privately; the application does not send email or messages. Repeat for each person you want to add.
 3. The recipient opens the link and signs in with that Google account. The invitation is email-bound, expires and can be redeemed only once. Opening the URL alone does not accept it.
-4. Once signed in, the owner connects Google Calendar. Subsequent portal sign-ins identify the owner without asking for Calendar consent again. Calendar permission only needs renewing when Google requires it or the owner disconnects it.
+4. The recipient can immediately manage the same bookings and settings as the other owners. They do not need to connect their own calendar or access the private GitHub repository.
+5. If the workspace has no calendar yet, an approved person opens **Google Calendar** and explicitly chooses **Connect Google Calendar**. Completing that separate consent assigns the calendar account. Joining through an invitation never assigns calendar ownership.
 
-The operator retains access to the same business workspace. Signing in as the operator does not replace the owner's connected calendar with the operator's calendar.
+One connected Google account supplies the shared booking calendar and busy-time checks. Everyone manages its bookings through the portal; each person does not contribute a separate calendar. The connected account can reconnect or disconnect its Calendar grant. Other owners' portal sign-ins and invitations never replace it. Inviting another owner does not grant them direct access in Google's own Calendar interface.
 
-The invite token is in a URL fragment, removed immediately by the page and sent only in the acceptance request. Only a hash is retained in the database. Link creation displays the full link once. Revocation and expiry are checked again when Google returns, so a link cannot be accepted after being revoked while sign-in was in progress. Generating a replacement supersedes the previous unused invitation.
+The invite token is in a URL fragment, removed immediately by the page and sent only in the acceptance request. Only a hash is retained in the database. Link creation displays the full link once. Revocation and expiry are checked again when Google returns, so a link cannot be accepted after being revoked while sign-in was in progress. Invitations to different people stay valid independently. Generating a replacement for the same email supersedes only that email's previous unused invitation.
+
+## People with access
+
+The operator can see the current people under **Access & invitations**. Removing an invited owner requires an inline confirmation and blocks their portal sessions; it preserves the shared bookings, availability and calendar. They need a new invitation and a new sign-in to regain access. Re-adding them does not revive an older revoked session. The operator and the assigned calendar account are protected from removal here, so the workspace cannot lose its access manager or calendar through an accidental member removal.
 
 ## Private installation policy
 
@@ -44,12 +49,12 @@ Hosted deployments can instead supply `OPERATOR_GOOGLE_EMAIL` and optionally `OP
 
 Existing Calendar tokens, settings and booking records stay in their current volume. Old sessions without an identified actor are invalidated: sign in again with Google. Once an operator is configured or a Google owner exists, the old reusable bootstrap URL no longer grants admin access. The original setup credential is kept only to recognize the installation and for the unconfigured initial setup path.
 
-An invitation cannot silently replace a different person's connected calendar or transfer existing bookings. Use a fresh dedicated production volume for the business owner, provision the operator identity, and invite the owner before connecting a test calendar. A development calendar is not a production handoff mechanism.
+Existing operators and calendar accounts retain access on upgrade. Additional owners can join that same installation without a calendar handoff. Membership and calendar ownership are separate: invitations never replace a connected account or move bookings. For a new production workspace, use a fresh dedicated volume, provision the operator, invite the people who need access, and let the intended calendar account explicitly connect. A development calendar is not a production handoff mechanism.
 
 Production still needs a separately authorized backend deployment, its registered HTTPS OAuth callback and private application configuration. Do not copy a development database, personal Calendar tokens or test bookings to initialize production. Main's currently deployed static website remains independent of this dev work.
 
 ## Storage and recovery
 
-Operator and owner identities, sessions, invitation records and encrypted Google tokens belong to each installation's persistent database. Updates preserve that volume. Generated invitation links do not belong in GitHub, even a private repository: issue a fresh short-lived link from the operator portal when needed.
+Operator and member identities, access status, sessions, invitation records and encrypted Google tokens belong to each installation's persistent database. Updates preserve that volume. Generated invitation links do not belong in GitHub, even a private repository: issue a fresh short-lived link from the operator portal when needed.
 
 Keep the database and encryption key together in a protected backup. Server administrators control the host and therefore can administer its private data; application roles do not protect against a compromised server administrator. Recovery or replacement of an established operator requires a deliberate server-side process, not a publicly reusable setup link.

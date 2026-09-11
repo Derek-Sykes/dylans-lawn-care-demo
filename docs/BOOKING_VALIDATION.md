@@ -2,7 +2,16 @@
 
 Validation date: September 10, 2026. The original sections below concern the local booking extension on `dev`. The separate manual-server verification is recorded below; it does not replace or deploy the existing demo/main environment.
 
-## Calendar buffers and private owner onboarding — September 10
+## Shared workspace owners — September 10
+
+- The operator can invite multiple owners to the same bookings, estimates and availability. Independent recipients' invitations coexist; replacements affect only the same email. Joining never assigns Calendar ownership. The first approved person to explicitly connect Calendar establishes the shared account.
+- Full Go race suite passed, including migration from the earlier schema, three identities reading and updating the same workspace, preserved encrypted Calendar records, independent/concurrent invitations, revocation and restart, account binding, and competing first Calendar connections. A legacy-session regression verifies that removal, reinvitation and later Calendar connection cannot revive an old cookie. Final race run: 18.893 seconds.
+- The complete local launcher check passed static package/revision/private-file checks and isolated bootstrap, cookies, CSRF, persisted-settings and public/admin separation checks. Added member endpoints reject unauthenticated and bootstrap access. Fresh images passed the trusted local HTTPS proxy check, including the member/invitation boundary on the public listener.
+- Public booking checks (18), admin access checks (27) and the admin refresh suite passed. Access tests include protected members, inline removal, independent invitation replacement, stale responses, permission loss and private-data cleanup.
+- Rebuilding the actual local workspace preserved the approved operator session and connected Calendar. Two synthetic local invitations remained pending together, and both were then revoked through the UI. No test email or Calendar event was created. Desktop and 390px Access layouts were reviewed, including text spacing and no document-level horizontal overflow; the temporary viewport override was reset. Native iOS Safari was not tested.
+- Hosted rollout and invitation delivery are recorded separately after the manual dev release. No main merge is part of this change.
+
+## Calendar buffers and private owner onboarding — September 10 (preceding update)
 
 - Development-only change: no main merge, server workflow dispatch, production configuration change or runtime-data transfer. Local testing retains the existing connected test calendar.
 - Appointment starts now follow actual free intervals after time off, saved bookings and protected Google conflicts are removed. Tests verify work availability 09:00–19:00 with a personal event 09:00–17:00 offers 17:30 with the default 30-minute external-event buffer, 17:15 when configured to 15, and 17:00 when configured to zero. The separate customer-appointment gap remains 15 minutes by default. Calendar-adjusted durations, saved booking gaps, retries, notice limits and DST remain covered.

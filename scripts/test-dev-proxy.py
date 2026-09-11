@@ -103,6 +103,7 @@ def probe():
     version = json.loads(request("/admin/version.json")[2])
     assert version == {"revision": expected_revision, "deploymentRunId": run_id, "deploymentRunAttempt": attempt}
     assert request("/api/admin/settings")[0] == 401
+    assert request("/api/admin/members")[0] == 401
     assert request("/api/admin/bootstrap", "POST", {"token": bootstrap}, origin="https://attacker.invalid")[0] == 403
     status, headers, body = request("/api/admin/bootstrap", "POST", {"token": bootstrap}, origin=ORIGIN)
     assert status == 200
@@ -122,6 +123,9 @@ def probe():
     # Setup permits initial configuration, but does not confer operator access.
     # Identity sign-in is separate from the authenticated Calendar consent flow.
     assert request("/api/admin/invitations", cookie=cookie)[0] == 403
+    assert request("/api/admin/members", cookie=cookie)[0] == 403
+    assert request("/api/admin/members/unapproved", "DELETE", cookie=cookie,
+                   csrf=csrf, origin=ORIGIN)[0] == 403
     assert request("/api/admin/invitations", "POST", {"email": "owner@example.com"},
                    cookie=cookie, csrf=csrf, origin=ORIGIN)[0] == 403
     assert request("/api/admin/google/connect", "POST", {}, origin=ORIGIN)[0] == 401
@@ -153,7 +157,7 @@ def probe():
     assert status == 303 and headers["Location"] == ORIGIN + "/admin/?google=failed"
     config = json.loads(request("/api/public/config")[2])
     assert config["bookingEnabled"] is False
-    for path in ("/api/admin/session", "/api/admin/settings", "/admin/", "/admin.js", "/oauth/callback"):
+    for path in ("/api/admin/session", "/api/admin/settings", "/api/admin/members", "/api/admin/invitations", "/admin/", "/admin.js", "/oauth/callback"):
         assert request(path, direct=True)[0] == 404, "Public listener exposed " + path
     print("PASS: trusted local HTTPS gateway, public/admin routing, assets, dispatch receipt, setup/operator access boundaries, CSRF, identity-only Google sign-in, browser-bound one-use OAuth callback and public-listener isolation.")
 

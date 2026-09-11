@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"errors"
 	"net/http"
 	"time"
@@ -22,8 +21,8 @@ func invitationError(code string) error {
 		return &apiError{410, code, "This invitation was revoked. Ask the operator for a new link."}
 	case "invitation_used":
 		return &apiError{409, code, "This invitation has already been used. Sign in with your Google account."}
-	case "owner_transfer_required":
-		return &apiError{409, code, "This installation already has a different owner. The operator must arrange a separate installation or a controlled owner handoff."}
+	case "member_already_exists":
+		return &apiError{409, code, "This Google account already has access to this workspace. They can sign in directly."}
 	default:
 		return &apiError{400, "invalid_invitation", "This invitation is not valid. Ask the operator for a new link."}
 	}
@@ -109,15 +108,6 @@ func (a *App) handleInvitationCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &apiError{400, "invalid_email", "Enter the owner's Google account email address."})
 		return
 	}
-	owner, err := a.google.owner()
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		writeError(w, err)
-		return
-	}
-	if owner.Sub != "" && normalizeAccessEmail(owner.Email) != in.Email {
-		writeError(w, invitationError("owner_transfer_required"))
-		return
-	}
 	token := randomToken(32)
 	actor, _, _ := a.session(r)
 	v := Invitation{ID: randomToken(18), Email: in.Email, ExpiresAt: a.now().Add(24 * time.Hour).UTC(), Status: "pending"}
@@ -127,7 +117,14 @@ func (a *App) handleInvitationCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec("UPDATE invitations SET status='revoked' WHERE status='pending'"); err == nil {
+	if exists, e := a.store.hasWorkspaceEmailTx(tx, in.Email); e != nil {
+		writeError(w, e)
+		return
+	} else if exists {
+		writeError(w, invitationError("member_already_exists"))
+		return
+	}
+	if _, err = tx.Exec("UPDATE invitations SET status='revoked' WHERE status='pending' AND email=?", in.Email); err == nil {
 		_, err = tx.Exec("INSERT INTO invitations(id,token_hash,email,expires,created,status,issuer_sub) VALUES(?,?,?,?,?,'pending',?)", v.ID, a.store.hash(token), v.Email, v.ExpiresAt.Unix(), a.now().Unix(), actor.Subject)
 	}
 	if err == nil {
@@ -186,8 +183,8 @@ func (a *App) handleInvitationAccept(w http.ResponseWriter, r *http.Request) {
 	a.beginOAuth(w, r, OAuthState{Purpose: "invite", InvitationID: id})
 }
 func (a *App) claimInvitation(id string, identity Owner) error {
-	// Serialize ownership against Calendar connect/disconnect. The transaction also
-	// protects invitation revocation, competing claims, and persistent identity.
+	// Serialize access changes against Calendar connection. Invitation acceptance
+	// grants workspace membership only; it never assigns or changes a Calendar.
 	a.google.ops.Lock()
 	defer a.google.ops.Unlock()
 	tx, err := a.store.db.Begin()
@@ -207,35 +204,18 @@ func (a *App) claimInvitation(id string, identity Owner) error {
 	if err = a.store.readTxSecret(tx, "operator_identity", &operator); err != nil || operator.GoogleSub != issuer {
 		return invitationError("invitation_revoked")
 	}
-	if normalizeAccessEmail(identity.Email) != email {
+	if identity.Sub == "" || validateOperatorIdentity(OperatorIdentity{Schema: 1, GoogleSub: identity.Sub, Email: identity.Email}) != nil || normalizeAccessEmail(identity.Email) != email {
 		return errWrongOwner
 	}
-	var owner Owner
-	err = a.store.readTxSecret(tx, "owner", &owner)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+	if exists, e := a.store.hasWorkspaceEmailTx(tx, email); e != nil {
+		return e
+	} else if exists {
+		return invitationError("member_already_exists")
 	}
-	// A second owner is always a deliberate handoff, even before Calendar connects.
-	if owner.Sub != "" && owner.Sub != identity.Sub {
-		return invitationError("owner_transfer_required")
-	}
-	if owner.Sub == "" {
-		var count int
-		if err = tx.QueryRow("SELECT COUNT(*) FROM bookings").Scan(&count); err != nil {
-			return err
-		}
-		if count != 0 {
-			return invitationError("owner_transfer_required")
-		}
-		owner = Owner{Sub: identity.Sub, Email: identity.Email}
-	}
-	if err = a.store.writeTxSecret(tx, "owner", owner); err != nil {
+	if err = a.store.addWorkspaceMemberTx(tx, identity, a.now()); err != nil {
 		return err
 	}
 	if _, err = tx.Exec("UPDATE invitations SET status='used',used_sub=? WHERE id=?", identity.Sub, id); err != nil {
-		return err
-	}
-	if _, err = tx.Exec("UPDATE invitations SET status='revoked' WHERE status='pending' AND id!=?", id); err != nil {
 		return err
 	}
 	if _, err = tx.Exec("INSERT INTO meta(key,value) VALUES('bootstrap_disabled','true') ON CONFLICT(key) DO UPDATE SET value='true'"); err != nil {

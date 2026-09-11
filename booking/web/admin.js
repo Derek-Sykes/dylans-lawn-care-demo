@@ -11,6 +11,7 @@
   const $ = selector => document.querySelector(selector);
   const state = { session: null, sessionEpoch: 0, sessionRequest: 0, refreshingSession: false, csrf: '', settings: null, bookings: [], bookingRevision: 0, activePanel: 'bookings', selectedId: null, dirty: false, saving: false, loadingBookings: false, connecting: false, configuring: false, disconnecting: false, replacingConfiguration: false, poll: null };
   Object.assign(state, { invitations: [], invitationLink: null, pendingRevokeId: null, invitationRevision: 0, loadingInvitations: false, savingInvitation: false });
+  Object.assign(state, { members: [], pendingRemoveId: null, memberRevision: 0, loadingMembers: false, removingMember: false });
   state.activeKind = 'service';
   const statusNames = { needs_followup: 'Needs contact', contacted: 'Contacted', confirmed: 'Confirmed', cancelled: 'Cancelled' };
   const kindOf = booking => booking.kind === 'estimate' ? 'estimate' : 'service';
@@ -59,8 +60,8 @@
     $('#sidebar-connection').textContent = needsAttention ? 'Calendar needs attention' : connected ? 'Calendar connected' : 'Calendar disconnected';
     $('#calendar-badge').textContent = needsAttention ? 'Needs attention' : connected ? 'Connected' : google.configured ? 'Not connected' : 'Setup needed';
     $('#calendar-badge').className = `badge ${connected && !needsAttention ? 'success' : 'warning'}`;
-    $('#calendar-title').textContent = needsAttention ? 'The calendar needs attention.' : connected ? 'The booking calendar is connected.' : 'Connect the owner’s calendar.';
-    $('#calendar-description').textContent = connected ? 'Requests go into a dedicated booking calendar. Busy times from that account’s primary calendar and booking calendar stay out of the available slots.' : google.configured ? canConnect ? 'Connect the owner’s Google Calendar to make online times available. This is separate from signing in to the portal.' : 'The calendar owner needs to sign in and connect Google Calendar before customers can book online. Your portal access stays the same.' : 'Google Calendar setup is not available on this installation yet. You can still manage availability and existing requests here.';
+    $('#calendar-title').textContent = needsAttention ? 'The calendar needs attention.' : connected ? 'The booking calendar is connected.' : 'Connect the shared calendar.';
+    $('#calendar-description').textContent = connected ? 'Everyone in this workspace uses this booking calendar. Busy times from that account’s primary calendar and booking calendar stay out of the available slots.' : google.configured ? canConnect ? 'Connect your Google Calendar to handle bookings for the whole workspace. This separate permission step makes online times available; signing in or accepting an invitation does not connect a calendar.' : 'The calendar account holder needs to sign in and reconnect Google Calendar before customers can book online. Your portal access stays the same.' : 'Google Calendar setup is not available on this installation yet. You can still manage availability and existing requests here.';
     $('#calendar-email').textContent = google.email ? `Calendar account: ${google.email}` : ''; $('#calendar-email').hidden = !google.email;
     $('#connect-google').hidden = !canConnect || (connected && !needsAttention); $('#connect-google').disabled = !google.configured || configurationRequired || state.connecting || state.configuring || state.disconnecting;
     $('#connect-google .button-label').textContent = connected && needsAttention ? 'Reconnect Google Calendar' : 'Connect Google Calendar';
@@ -85,7 +86,9 @@
     $('#session-identity').hidden = !state.session?.authenticated;
     $('#access-nav').hidden = !canManage;
     if (!canManage) {
-      clearInvitationLink(); state.pendingRevokeId = null; state.invitations = []; $('#invitation-list').replaceChildren();
+      clearInvitationLink(); state.pendingRevokeId = null; state.invitations = []; state.invitationRevision++; state.loadingInvitations = false; state.savingInvitation = false; $('#invitation-list').replaceChildren();
+      $('#invitation-form').reset(); $('#invitation-fields').disabled = false; $('#refresh-invitations').disabled = false; $('#invitation-list').setAttribute('aria-busy', 'false'); $('#create-invitation .button-label').textContent = 'Create invitation'; message('#invitation-message', ''); message('#invitations-message', '');
+      resetMembers();
       if (state.activePanel === 'access') switchPanel('bookings');
     }
   }
@@ -113,6 +116,7 @@
     state.session = previous ? { authenticated: false, setupRequired: previous.setupRequired, google: { configured: Boolean(previous.google?.configured), connected: Boolean(previous.google?.connected), mode: previous.google?.mode } } : null;
     state.csrf = ''; state.bookings = []; state.settings = null; state.selectedId = null; state.dirty = false; state.saving = false; state.loadingBookings = false; state.connecting = false; state.configuring = false; state.disconnecting = false; state.replacingConfiguration = false;
     state.invitations = []; state.pendingRevokeId = null; state.invitationRevision++; state.loadingInvitations = false; state.savingInvitation = false;
+    resetMembers();
     clearInvitationLink(); $('#invitation-list').replaceChildren(); $('#invitation-list').setAttribute('aria-busy', 'false'); $('#invitation-form').reset(); $('#invitation-fields').disabled = false; $('#refresh-invitations').disabled = false;
     $('#create-invitation .button-label').textContent = 'Create invitation';
     $('#session-identity').textContent = ''; $('#session-identity').hidden = true; $('#access-nav').hidden = true; $('#access-panel').hidden = true;
@@ -134,13 +138,13 @@
     $('#portal').hidden = true; $('#logout').hidden = true; $('#loading-view').hidden = true; $('#signin-view').hidden = false;
     const signInAvailable = Boolean(state.session?.google?.configured);
     $('#signin-google').hidden = !signInAvailable;
-    $('#signin-copy').textContent = invitationToken ? 'You have a private owner invitation. Continue with the Google account this invitation was sent to.' : signInAvailable ? 'Sign in with your approved Google account to manage bookings and availability. Signing in does not change the connected calendar.' : 'Google sign-in is not ready on this installation. Ask the person who set up the portal to finish its private setup.';
+    $('#signin-copy').textContent = invitationToken ? 'You have a private workspace invitation. Continue with the Google account this invitation was sent to. You will share the existing bookings and availability.' : signInAvailable ? 'Sign in with your approved Google account to manage bookings and availability. Signing in does not change the connected calendar.' : 'Google sign-in is not ready on this installation. Ask the person who set up the portal to finish its private setup.';
     $('#signin-google .button-label').textContent = invitationToken ? 'Accept invitation with Google' : 'Sign in with Google';
     switchPanel('bookings', false, 'service');
   }
   function switchPanel(panel, focus = false, kind = state.activeKind) {
     if (panel === 'access' && !state.session?.canManageAccess) return;
-    if (state.activePanel === 'access' && panel !== 'access') { clearInvitationLink(); state.pendingRevokeId = null; renderInvitations(); message('#invitation-message', ''); }
+    if (state.activePanel === 'access' && panel !== 'access') { clearInvitationLink(); state.pendingRevokeId = null; state.pendingRemoveId = null; renderInvitations(); renderMembers(); message('#invitation-message', ''); message('#members-message', ''); }
     state.activePanel = panel;
     if (panel === 'bookings') state.activeKind = kind === 'estimate' ? 'estimate' : 'service';
     document.querySelectorAll('.workspace-panel').forEach(element => { element.hidden = element.id !== `${panel}-panel`; });
@@ -149,7 +153,7 @@
     if (focus) $(`#${panel}-heading`).focus();
     if (panel === 'calendar') refreshSession();
     if (panel === 'bookings') loadBookings(true);
-    if (panel === 'access') { refreshSession(); loadInvitations(); }
+    if (panel === 'access') { refreshSession(); loadInvitations(); loadMembers(); }
   }
   function formatDate(value, timeOnly = false) {
     const date = new Date(value);
@@ -377,6 +381,81 @@
   function clearInvitationLink() {
     state.invitationLink = null; $('#invitation-link').value = ''; $('#invitation-result-description').textContent = ''; $('#invitation-result').hidden = true;
   }
+  function resetMembers() {
+    state.members = []; state.pendingRemoveId = null; state.memberRevision++; state.loadingMembers = false; state.removingMember = false;
+    $('#member-list').replaceChildren(); $('#member-list').setAttribute('aria-busy', 'false'); $('#refresh-members').disabled = false; message('#members-message', '');
+  }
+  function renderMembers(focusId = '', focusAction = '') {
+    const fragment = document.createDocumentFragment(); let focusTarget = null;
+    if (!focusId && document.activeElement?.dataset?.memberId) { focusId = document.activeElement.dataset.memberId; focusAction = document.activeElement.dataset.memberAction; }
+    if (!state.members.length) fragment.append(node('p', 'empty-state', 'No people could be listed. Refresh to check workspace access.'));
+    state.members.forEach(member => {
+      const row = node('article', 'member-row'); const details = node('div', 'member-details');
+      const heading = node('h3', '', member.email); heading.tabIndex = -1;
+      heading.dataset.memberId = member.id; heading.dataset.memberAction = 'heading';
+      if (member.id === focusId && focusAction === 'heading') focusTarget = heading;
+      const labels = node('div', 'member-labels');
+      labels.append(badge(member.role === 'operator' ? 'Operator' : 'Owner', 'neutral'));
+      if (member.calendarOwner) labels.append(badge('Calendar account', 'success'));
+      if (member.email.toLowerCase() === state.session?.actorEmail?.toLowerCase()) labels.append(badge('You', 'neutral'));
+      details.append(heading, labels);
+      if (!member.canRemove) details.append(node('p', 'small muted', member.calendarOwner ? 'Keeps the shared booking calendar connected.' : 'Manages invitations and workspace access.'));
+      row.append(details);
+      function action(label, className, actionName, handler) {
+        const button = node('button', className, label); button.type = 'button'; button.disabled = state.removingMember;
+        button.dataset.memberId = member.id; button.dataset.memberAction = actionName; button.addEventListener('click', handler);
+        if (member.id === focusId && actionName === focusAction) focusTarget = button;
+        return button;
+      }
+      if (member.canRemove && state.session?.canManageAccess) {
+        if (state.pendingRemoveId === member.id) {
+          const confirmation = node('div', 'member-confirmation'); confirmation.setAttribute('role', 'group'); confirmation.setAttribute('aria-label', `Remove access for ${member.email}`);
+          const actions = node('div', 'invitation-confirm-actions');
+          actions.append(action(state.removingMember ? 'Removing…' : 'Confirm removal', 'button button-danger', 'confirm', () => removeMember(member)), action('Keep access', 'button button-secondary', 'keep', () => { if (state.removingMember) return; state.pendingRemoveId = null; renderMembers(member.id, 'remove'); }));
+          confirmation.append(node('p', 'small muted', 'This person will be signed out and lose portal access. Shared appointments, availability and the connected calendar stay in place.'), actions); row.append(confirmation);
+        } else {
+          const remove = action('Remove access', 'button button-quiet', 'remove', () => { if (state.removingMember || !state.session?.canManageAccess) return; state.pendingRemoveId = member.id; message('#members-message', ''); renderMembers(member.id, 'confirm'); });
+          remove.setAttribute('aria-label', `Remove access for ${member.email}`); row.append(remove);
+        }
+      } else if (member.id === focusId) focusTarget = heading;
+      if (member.id === focusId && focusTarget?.disabled) focusTarget = heading;
+      fragment.append(row);
+    });
+    $('#member-list').replaceChildren(fragment);
+    if (state.activePanel === 'access' && focusTarget && !focusTarget.disabled) focusTarget.focus();
+  }
+  async function loadMembers() {
+    if (!state.session?.authenticated || !state.session.canManageAccess || state.loadingMembers || state.removingMember) return false;
+    const epoch = state.sessionEpoch; const revision = state.memberRevision;
+    state.loadingMembers = true; $('#refresh-members').disabled = true;
+    try {
+      const data = await api('/api/admin/members');
+      if (epoch !== state.sessionEpoch || revision !== state.memberRevision || !state.session?.canManageAccess) return false;
+      if (!Array.isArray(data?.members) || data.members.some(item => !item || typeof item.id !== 'string' || !item.id || typeof item.email !== 'string' || !['owner', 'operator'].includes(item.role) || typeof item.calendarOwner !== 'boolean' || typeof item.canRemove !== 'boolean')) throw new APIError('People with access could not be read. Please refresh.');
+      state.members = data.members;
+      if (state.pendingRemoveId && !state.members.some(item => item.id === state.pendingRemoveId && item.canRemove)) state.pendingRemoveId = null;
+      renderMembers(); message('#members-message', ''); return true;
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.memberRevision && state.session?.canManageAccess) message('#members-message', error.message, 'error'); return false; }
+    finally { if (epoch === state.sessionEpoch && revision === state.memberRevision && state.session?.canManageAccess) { state.loadingMembers = false; $('#refresh-members').disabled = false; } }
+  }
+  async function removeMember(member) {
+    if (!state.session?.authenticated || !state.session.canManageAccess || state.removingMember || state.pendingRemoveId !== member.id || !state.members.some(item => item.id === member.id && item.canRemove)) return;
+    const epoch = state.sessionEpoch; const revision = ++state.memberRevision;
+    state.loadingMembers = false; state.removingMember = true; $('#refresh-members').disabled = true; $('#member-list').setAttribute('aria-busy', 'true'); renderMembers(); message('#members-message', '');
+    try {
+      await api(`/api/admin/members/${encodeURIComponent(member.id)}`, { method: 'DELETE' });
+      if (epoch !== state.sessionEpoch || revision !== state.memberRevision || !state.session?.canManageAccess) return;
+      state.members = state.members.filter(item => item.id !== member.id); state.pendingRemoveId = null;
+      message('#members-message', `${member.email} no longer has portal access. Shared appointments and the calendar are unchanged.`, 'success');
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.memberRevision && state.session?.canManageAccess) message('#members-message', error.message, 'error'); }
+    finally {
+      if (epoch === state.sessionEpoch && revision === state.memberRevision && state.session?.canManageAccess) {
+        const restoreFocus = state.activePanel === 'access' && document.activeElement?.dataset?.memberId === member.id;
+        state.removingMember = false; $('#refresh-members').disabled = false; $('#member-list').setAttribute('aria-busy', 'false'); renderMembers();
+        if (restoreFocus) { if (state.members.some(item => item.id === member.id)) renderMembers(member.id, 'confirm'); else $('#members-heading').focus(); }
+      }
+    }
+  }
   function invitationTime(value) {
     return Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Expiry unavailable';
   }
@@ -384,7 +463,7 @@
     const fragment = document.createDocumentFragment();
     let focusTarget = null;
     if (!focusId && document.activeElement?.dataset?.invitationId) { focusId = document.activeElement.dataset.invitationId; focusAction = document.activeElement.dataset.invitationAction; }
-    if (!state.invitations.length) fragment.append(node('p', 'empty-state', 'No invitations yet. Create a private link when the owner is ready.'));
+    if (!state.invitations.length) fragment.append(node('p', 'empty-state', 'No invitations yet. Create a private link to welcome a co-owner.'));
     state.invitations.forEach(invitation => {
       const row = node('article', 'invitation-row'); const details = node('div');
       const status = invitation.status === 'pending' && Date.parse(invitation.expiresAt) <= Date.now() ? 'expired' : invitation.status;
@@ -428,8 +507,8 @@
       if (state.invitationLink && !state.invitations.some(item => item.id === state.invitationLink.id && item.status === 'pending' && Date.parse(item.expiresAt) > Date.now())) clearInvitationLink();
       if (state.pendingRevokeId && !state.invitations.some(item => item.id === state.pendingRevokeId && item.status === 'pending' && Date.parse(item.expiresAt) > Date.now())) state.pendingRevokeId = null;
       renderInvitations(); message('#invitations-message', ''); return true;
-    } catch (error) { if (epoch === state.sessionEpoch && revision === state.invitationRevision) message('#invitations-message', error.message, 'error'); return false; }
-    finally { if (epoch === state.sessionEpoch) { state.loadingInvitations = false; $('#refresh-invitations').disabled = false; } }
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.invitationRevision && state.session?.canManageAccess) message('#invitations-message', error.message, 'error'); return false; }
+    finally { if (epoch === state.sessionEpoch && revision === state.invitationRevision && state.session?.canManageAccess) { state.loadingInvitations = false; $('#refresh-invitations').disabled = false; } }
   }
   function lockInvitations(locked) {
     state.savingInvitation = locked; $('#invitation-fields').disabled = locked; $('#refresh-invitations').disabled = locked; $('#invitation-list').setAttribute('aria-busy', String(locked)); renderInvitations();
@@ -439,14 +518,14 @@
     if (!state.session?.authenticated || !state.session.canManageAccess || state.savingInvitation || !$('#invitation-form').reportValidity()) return;
     const email = $('#invitation-email').value.trim();
     if (!email) return;
-    const epoch = state.sessionEpoch; state.invitationRevision++;
+    const epoch = state.sessionEpoch; const revision = ++state.invitationRevision; state.loadingInvitations = false;
     clearInvitationLink(); state.pendingRevokeId = null; lockInvitations(true); message('#invitation-message', ''); $('#create-invitation .button-label').textContent = 'Creating…';
     try {
       const data = await api('/api/admin/invitations', { method: 'POST', body: { email } });
-      if (epoch !== state.sessionEpoch || !state.session?.canManageAccess) return;
+      if (epoch !== state.sessionEpoch || revision !== state.invitationRevision || !state.session?.canManageAccess) return;
       const invitation = data?.invitation; const url = new URL(data?.url);
       if (!invitation || typeof invitation.id !== 'string' || typeof invitation.email !== 'string' || invitation.status !== 'pending' || !Number.isFinite(Date.parse(invitation.expiresAt)) || url.origin !== new URL(window.location.href).origin || !new URLSearchParams(url.hash.slice(1)).get('invite')) throw new APIError('The invitation may have been created, but its private link could not be read. Refresh the history and create a replacement for the same email.');
-      state.invitations = state.invitations.map(item => item.status === 'pending' ? { ...item, status: 'revoked' } : item);
+      state.invitations = state.invitations.map(item => item.status === 'pending' && item.email.toLowerCase() === invitation.email.toLowerCase() ? { ...item, status: 'revoked' } : item);
       state.invitations.unshift(invitation);
       if (state.activePanel === 'access') {
         state.invitationLink = { id: invitation.id, url: url.href }; $('#invitation-link').value = url.href;
@@ -454,21 +533,21 @@
         $('#invitation-result').hidden = false; $('#copy-invitation').focus();
       }
       message('#invitation-message', state.activePanel === 'access' ? 'Invitation created. Copy the link and share it privately.' : 'Invitation created. Create a replacement to show a new private link.', 'success');
-    } catch (error) { if (epoch === state.sessionEpoch) message('#invitation-message', error instanceof TypeError ? 'The invitation result could not be read. Refresh the history before creating a replacement for the same email.' : error.message, 'error'); }
-    finally { if (epoch === state.sessionEpoch) { lockInvitations(false); $('#create-invitation .button-label').textContent = 'Create invitation'; } }
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.invitationRevision && state.session?.canManageAccess) message('#invitation-message', error instanceof TypeError ? 'The invitation result could not be read. Refresh the history before creating a replacement for the same email.' : error.message, 'error'); }
+    finally { if (epoch === state.sessionEpoch && revision === state.invitationRevision && state.session?.canManageAccess) { lockInvitations(false); $('#create-invitation .button-label').textContent = 'Create invitation'; } }
   }
   async function revokeInvitation(invitation) {
     if (!state.session?.authenticated || !state.session.canManageAccess || state.savingInvitation || state.pendingRevokeId !== invitation.id || !state.invitations.some(item => item.id === invitation.id && item.status === 'pending')) return;
-    const epoch = state.sessionEpoch; state.invitationRevision++;
+    const epoch = state.sessionEpoch; const revision = ++state.invitationRevision; state.loadingInvitations = false;
     lockInvitations(true); message('#invitation-message', '');
     try {
       await api(`/api/admin/invitations/${encodeURIComponent(invitation.id)}`, { method: 'DELETE' });
-      if (epoch !== state.sessionEpoch || !state.session?.canManageAccess) return;
+      if (epoch !== state.sessionEpoch || revision !== state.invitationRevision || !state.session?.canManageAccess) return;
       state.invitations = state.invitations.map(item => item.id === invitation.id ? { ...item, status: 'revoked' } : item);
       if (state.invitationLink?.id === invitation.id) clearInvitationLink();
       message('#invitation-message', 'Invitation revoked. Its link can no longer be accepted.', 'success');
-    } catch (error) { if (epoch === state.sessionEpoch) message('#invitation-message', error.message, 'error'); }
-    finally { if (epoch === state.sessionEpoch) { const restoreFocus = state.pendingRevokeId === invitation.id && state.activePanel === 'access'; if (state.invitations.some(item => item.id === invitation.id && item.status === 'revoked')) state.pendingRevokeId = null; lockInvitations(false); if (restoreFocus) renderInvitations(invitation.id, 'confirm'); } }
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.invitationRevision && state.session?.canManageAccess) message('#invitation-message', error.message, 'error'); }
+    finally { if (epoch === state.sessionEpoch && revision === state.invitationRevision && state.session?.canManageAccess) { const restoreFocus = state.pendingRevokeId === invitation.id && state.activePanel === 'access'; if (state.invitations.some(item => item.id === invitation.id && item.status === 'revoked')) state.pendingRevokeId = null; lockInvitations(false); if (restoreFocus) renderInvitations(invitation.id, 'confirm'); } }
   }
   async function openGoogle(path, body) {
     if (state.connecting || state.configuring || state.disconnecting) return;
@@ -507,10 +586,10 @@
         if (results.some(result => result.status === 'rejected')) message('#page-message', 'Some portal information could not be loaded. Refresh to try again.', 'error');
         schedulePoll();
       }
-      const outcomes = { denied: 'Google sign-in was cancelled. Try again, or reopen the private link if you were accepting an invitation.', failed: 'Google could not complete this request. Try signing in again, or reopen your private invitation link to accept it.', wrong_account: 'That Google account does not have access for this request. Use your approved account. If you were accepting an invitation, reopen its private link and choose the exact invited email.', invalid_invitation: 'This invitation is not valid. Ask the operator for a new private link.', invitation_expired: 'This invitation has expired. Ask the operator for a new private link.', invitation_revoked: 'This invitation has been revoked. Ask the operator for a new private link.', invitation_used: 'This invitation has already been accepted. Sign in with your approved Google account.', owner_transfer_required: 'This portal already has another calendar owner or saved appointments. Ask the operator to arrange a calendar ownership transfer before accepting this invitation.', missing_scopes: 'Google Calendar permissions were not completed. Connect again and allow the requested calendar access.', configuration_required: 'Google sign-in needs a one-time setup on this installation. Ask the person who set up this portal to finish the private Google connection settings, then try again.' };
+      const outcomes = { denied: 'Google sign-in was cancelled. Try again, or reopen the private link if you were accepting an invitation.', failed: 'Google could not complete this request. Try signing in again, or reopen your private invitation link to accept it.', wrong_account: 'That Google account does not have access for this request. Use your approved account. If you were accepting an invitation, reopen its private link and choose the exact invited email.', invalid_invitation: 'This invitation is not valid. Ask the operator for a new private link.', invitation_expired: 'This invitation has expired. Ask the operator for a new private link.', invitation_revoked: 'This invitation has been revoked. Ask the operator for a new private link.', invitation_used: 'This invitation has already been accepted. Sign in with your approved Google account.', member_already_exists: 'This Google account already has access to the shared workspace. Sign in with Google to continue; you do not need another invitation.', missing_scopes: 'Google Calendar permissions were not completed. Connect again and allow the requested calendar access.', configuration_required: 'Google sign-in needs a one-time setup on this installation. Ask the person who set up this portal to finish the private Google connection settings, then try again.' };
       if (outcomes[oauthOutcome]) message('#page-message', outcomes[oauthOutcome], oauthOutcome === 'denied' ? '' : 'error');
       if (['connected', 'missing_scopes', 'configuration_required'].includes(oauthOutcome) && state.session?.authenticated) switchPanel('calendar');
-      if (oauthOutcome === 'invited' && state.session?.authenticated) message('#page-message', 'Your invitation is accepted. You can now manage bookings and availability.', 'success');
+      if (oauthOutcome === 'invited' && state.session?.authenticated) message('#page-message', 'Welcome to the shared workspace. You can now manage the same appointments, callbacks and availability.', 'success');
     } catch (error) { if (epoch === state.sessionEpoch) { showSignedOut(); message('#page-message', error.message, 'error'); } }
     finally { if (epoch === state.sessionEpoch || !state.session?.authenticated) $('#loading-view').hidden = true; }
   }
@@ -524,6 +603,7 @@
         if (epoch !== state.sessionEpoch || !state.session?.authenticated) return;
         if (state.activePanel === 'bookings') await loadBookings(true);
         if (state.activePanel === 'access' && !$('#invitation-list').contains(document.activeElement)) await loadInvitations();
+        if (state.activePanel === 'access' && !$('#member-list').contains(document.activeElement)) await loadMembers();
       }
       if (epoch === state.sessionEpoch) schedulePoll();
     }, 60000);
@@ -533,12 +613,14 @@
     refreshSession();
     if (state.activePanel === 'bookings') loadBookings(true);
     if (state.activePanel === 'access' && !$('#invitation-list').contains(document.activeElement)) loadInvitations();
+    if (state.activePanel === 'access' && !$('#member-list').contains(document.activeElement)) loadMembers();
     schedulePoll();
   }
   document.querySelectorAll('[data-panel]').forEach(button => button.addEventListener('click', () => switchPanel(button.dataset.panel, true, button.dataset.kind)));
   $('#session-retry').addEventListener('click', start);
   $('#invitation-form').addEventListener('submit', createInvitation);
   $('#refresh-invitations').addEventListener('click', loadInvitations);
+  $('#refresh-members').addEventListener('click', loadMembers);
   $('#hide-invitation').addEventListener('click', () => { clearInvitationLink(); message('#invitation-message', 'Private link hidden.'); $('#invitation-email').focus(); });
   $('#copy-invitation').addEventListener('click', async () => {
     const link = state.invitationLink; const epoch = state.sessionEpoch;
@@ -546,7 +628,7 @@
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(link.url);
-      if (epoch === state.sessionEpoch && state.invitationLink === link) message('#invitation-message', 'Private link copied. Share it only with the invited owner.', 'success');
+      if (epoch === state.sessionEpoch && state.invitationLink === link) message('#invitation-message', 'Private link copied. Share it only with the invited person.', 'success');
     } catch {
       if (epoch === state.sessionEpoch && state.invitationLink === link) { $('#invitation-link').focus(); $('#invitation-link').select(); message('#invitation-message', 'Select and copy the private link below. Automatic copying is unavailable in this browser.'); }
     }

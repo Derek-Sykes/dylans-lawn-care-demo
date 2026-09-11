@@ -40,6 +40,7 @@ anonymous, _ = request("/api/admin/session", auth=False)
 assert anonymous["authenticated"] is False
 assert "email" not in anonymous.get("google", {})
 request("/api/admin/settings", auth=False, expected=401)
+request("/api/admin/members", auth=False, expected=401)
 request("/api/admin/bootstrap", "POST", {"token": os.environ["BOOTSTRAP_TOKEN"]},
         origin="https://untrusted.example", auth=False, expected=403)
 session, headers = request("/api/admin/bootstrap", "POST", {"token": os.environ["BOOTSTRAP_TOKEN"]}, auth=False)
@@ -48,6 +49,8 @@ csrf = session["csrfToken"]
 cookies = headers.get_all("Set-Cookie", [])
 assert cookies and any("httponly" in value.lower() for value in cookies), "Admin session must be HttpOnly"
 cookie = "; ".join(value.split(";", 1)[0] for value in cookies)
+request("/api/admin/members", expected=403)
+request("/api/admin/members/unapproved", "DELETE", expected=403)
 settings, _ = request("/api/admin/settings")
 request("/api/admin/settings", "PUT", settings, csrf_header=False, expected=403)
 settings["businessName"] = "Isolated launcher integration check"
@@ -62,7 +65,7 @@ assert len(public["services"]) == 3
 request("/api/admin/session", admin=False, expected=404)
 request("/oauth/callback", admin=False, expected=404)
 request("/booking/web/index.html", admin=False, expected=404)
-for path in ("/api/admin/session", "/admin.js", "/oauth/callback"):
+for path in ("/api/admin/session", "/api/admin/members", "/api/admin/invitations", "/admin.js", "/oauth/callback"):
     request(path, admin=False, direct_public=True, expected=404)
 request("/api/admin/logout", "POST", expected=204)
 request("/api/admin/settings", expected=401)

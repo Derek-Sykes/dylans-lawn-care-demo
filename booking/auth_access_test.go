@@ -225,9 +225,11 @@ func TestInvitationSignupAndRoleIsolation(t *testing.T) {
 		t.Fatalf("claim failed: %s", w.Header().Get("Location"))
 	}
 	ownerCookie := sessionCookie(t, a, w)
-	owner, err := a.google.owner()
-	if err != nil || owner.Sub != f.sub || owner.CalendarID != "" {
-		t.Fatal("invitation did not bind owner without Calendar")
+	if _, err := a.google.owner(); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("invitation assigned a Calendar owner before explicit connection")
+	}
+	if a.identityRole(f.sub, f.email) != "owner" {
+		t.Fatal("invitation did not grant workspace access")
 	}
 	if a.google.connection().Connected {
 		t.Fatal("invitation saved an identity token as Calendar credentials")
@@ -296,10 +298,10 @@ func TestInvitationConcurrentClaimAndReplacement(t *testing.T) {
 	cookie, csrf := configureTestOperator(t, a)
 	first, oldToken := createTestInvitation(t, a, cookie, csrf, "owner@example.com")
 	second, _ := createTestInvitation(t, a, cookie, csrf, "another@example.com")
+	invite, _ := createTestInvitation(t, a, cookie, csrf, "owner@example.com")
 	if w := request(a, true, "POST", "/api/admin/invitations/accept", map[string]string{"token": oldToken}, nil, "", a.cfg.AdminOrigin); w.Code != 410 {
 		t.Fatal("replacement left old token usable")
 	}
-	invite, _ := createTestInvitation(t, a, cookie, csrf, "owner@example.com")
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
 	for range 2 {
@@ -320,15 +322,15 @@ func TestInvitationConcurrentClaimAndReplacement(t *testing.T) {
 	if success != 1 {
 		t.Fatal("invitation consumed more than once")
 	}
-	for _, id := range []string{first.ID, second.ID} {
+	for id, want := range map[string]string{first.ID: "revoked", second.ID: "pending"} {
 		var status string
 		_ = a.store.db.QueryRow("SELECT status FROM invitations WHERE id=?", id).Scan(&status)
-		if status != "revoked" {
-			t.Fatal("old or competing invitation retained ownership power")
+		if status != want {
+			t.Fatal("per-email replacement changed an unrelated invitation")
 		}
 	}
 }
-func TestInvitationCSRFOriginForgeryAndOwnerTransfer(t *testing.T) {
+func TestInvitationCSRFOriginForgeryAndCalendarPreservation(t *testing.T) {
 	a, _ := testApp(t)
 	cookie, csrf := configureTestOperator(t, a)
 	for _, test := range []struct {
@@ -346,17 +348,17 @@ func TestInvitationCSRFOriginForgeryAndOwnerTransfer(t *testing.T) {
 	invite, _ := createTestInvitation(t, a, cookie, csrf, "owner@example.com")
 	_ = a.store.putSecret("owner", Owner{Sub: "another-owner", Email: "another@example.com", CalendarID: "keep-calendar"})
 	_ = a.store.putSecret("google_tokens", GoogleTokens{Refresh: "keep-refresh"})
-	if err := a.claimInvitation(invite.ID, Owner{Sub: "owner-sub", Email: "owner@example.com"}); invitationOutcome(err) != "owner_transfer_required" {
-		t.Fatal("pending invitation replaced established owner")
+	if err := a.claimInvitation(invite.ID, Owner{Sub: "owner-sub", Email: "owner@example.com"}); err != nil {
+		t.Fatalf("new workspace member could not join: %v", err)
 	}
 	if w := request(a, true, "POST", "/api/admin/invitations", map[string]string{"email": "owner@example.com"}, cookie, csrf, a.cfg.AdminOrigin); w.Code != 409 {
-		t.Fatal("did not explain required owner handoff before issuing link")
+		t.Fatal("active workspace member received a duplicate invitation")
 	}
 	owner, _ := a.google.owner()
 	var tokens GoogleTokens
 	_ = a.store.getSecret("google_tokens", &tokens)
 	if owner.CalendarID != "keep-calendar" || tokens.Refresh != "keep-refresh" {
-		t.Fatal("failed transfer damaged Calendar credentials")
+		t.Fatal("new member changed existing Calendar credentials")
 	}
 }
 func TestLegacySessionsBootstrapAndOwnerMigration(t *testing.T) {

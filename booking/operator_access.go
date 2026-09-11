@@ -103,18 +103,42 @@ func (a *App) bootstrapAllowed() bool {
 }
 
 func (a *App) identityRole(sub, email string) string {
+	role, _ := a.identityAccess(sub, email)
+	return role
+}
+
+// The Calendar identity remains a protected workspace member during upgrades.
+// Invited members have a separate session generation, rotated on every rejoin.
+func (a *App) identityAccess(sub, email string) (string, string) {
+	if sub == "" {
+		return "", ""
+	}
 	operator, err := a.store.operatorIdentity()
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return ""
+		return "", ""
 	}
 	if err == nil && sub != "" && sub == operator.GoogleSub && normalizeAccessEmail(email) == normalizeAccessEmail(operator.Email) {
-		return "operator"
+		return "operator", ""
+	}
+	var version, memberEmail, status string
+	err = a.store.db.QueryRow("SELECT session_version,email,status FROM workspace_members WHERE google_sub=?", sub).Scan(&version, &memberEmail, &status)
+	if err == nil {
+		if status == "active" && memberEmail == normalizeAccessEmail(email) {
+			return "owner", version
+		}
+		return "", ""
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", ""
 	}
 	owner, err := a.google.owner()
 	if err == nil && sub != "" && sub == owner.Sub && normalizeAccessEmail(email) == normalizeAccessEmail(owner.Email) {
-		return "owner"
+		return "owner", ""
 	}
-	return ""
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", ""
+	}
+	return "", ""
 }
 
 // An email-only installation policy is pinned to Google's stable subject on the
@@ -198,9 +222,25 @@ func (a *App) authorizeCalendarTx(tx *sql.Tx, record OAuthState) bool {
 	var owner Owner
 	err = a.store.readTxSecret(tx, "owner", &owner)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && owner.Sub == "") {
-		return isOperator
+		if isOperator {
+			return true
+		}
+		var version string
+		err = tx.QueryRow("SELECT session_version FROM workspace_members WHERE google_sub=? AND email=? AND status='active'", s.Subject, normalizeAccessEmail(s.Email)).Scan(&version)
+		return err == nil && version != "" && s.MemberVersion == version
 	}
-	return err == nil && s.Subject != "" && s.Subject == owner.Sub && normalizeAccessEmail(s.Email) == normalizeAccessEmail(owner.Email)
+	if err != nil || s.Subject == "" || s.Subject != owner.Sub || normalizeAccessEmail(s.Email) != normalizeAccessEmail(owner.Email) {
+		return false
+	}
+	if isOperator {
+		return s.MemberVersion == ""
+	}
+	var version, email, status string
+	err = tx.QueryRow("SELECT session_version,email,status FROM workspace_members WHERE google_sub=?", s.Subject).Scan(&version, &email, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s.MemberVersion == ""
+	}
+	return err == nil && status == "active" && email == normalizeAccessEmail(s.Email) && version == s.MemberVersion
 }
 func (a *App) canConnectCalendar(s Session) bool {
 	if s.Role == "bootstrap" {
@@ -211,7 +251,12 @@ func (a *App) canConnectCalendar(s Session) bool {
 	}
 	owner, err := a.google.owner()
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && owner.Sub == "") {
-		return s.Role == "operator"
+		role, version := a.identityAccess(s.Subject, s.Email)
+		return (role == "operator" || role == "owner") && version == s.MemberVersion
 	}
-	return err == nil && s.Subject == owner.Sub && normalizeAccessEmail(s.Email) == normalizeAccessEmail(owner.Email)
+	if err != nil || s.Subject != owner.Sub || normalizeAccessEmail(s.Email) != normalizeAccessEmail(owner.Email) {
+		return false
+	}
+	role, version := a.identityAccess(s.Subject, s.Email)
+	return role != "" && version == s.MemberVersion
 }

@@ -9,11 +9,12 @@ import (
 )
 
 type Session struct {
-	CSRF    string `json:"csrf"`
-	Expires int64  `json:"expires"`
-	Subject string `json:"subject"`
-	Email   string `json:"email"`
-	Role    string `json:"role"`
+	CSRF          string `json:"csrf"`
+	Expires       int64  `json:"expires"`
+	Subject       string `json:"subject"`
+	Email         string `json:"email"`
+	Role          string `json:"role"`
+	MemberVersion string `json:"memberVersion,omitempty"`
 }
 type OAuthState struct {
 	Verifier     string `json:"verifier"`
@@ -65,8 +66,8 @@ func (a *App) sessionByID(id string) (Session, error) {
 	if v.Role == "bootstrap" && a.bootstrapAllowed() {
 		return v, nil
 	}
-	role := a.identityRole(v.Subject, v.Email)
-	if role == "" || (v.Role != "owner" && v.Role != "operator") {
+	role, version := a.identityAccess(v.Subject, v.Email)
+	if role == "" || (v.Role != "owner" && v.Role != "operator") || version != v.MemberVersion {
 		return Session{}, errors.New("session identity is no longer authorized")
 	}
 	v.Role = role
@@ -78,6 +79,14 @@ func (a *App) newSession(w http.ResponseWriter, actor ...Session) (Session, erro
 	v := Session{Role: "bootstrap"}
 	if len(actor) == 1 {
 		v = actor[0]
+		if v.Role != "bootstrap" {
+			v.Role, v.MemberVersion = a.identityAccess(v.Subject, v.Email)
+			if v.Role == "" {
+				return Session{}, errors.New("session identity is no longer authorized")
+			}
+		} else if !a.bootstrapAllowed() {
+			return Session{}, errors.New("bootstrap is disabled")
+		}
 	} else if !a.bootstrapAllowed() {
 		return Session{}, errors.New("bootstrap is disabled")
 	}
