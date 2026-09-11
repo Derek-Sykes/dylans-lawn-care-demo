@@ -264,6 +264,9 @@ test('joining a workspace grants no automatic calendar connection', async () => 
   assert.match(f.$('#calendar-description').textContent, /Everyone in this workspace/);
   const fresh = fixture(); fresh.authenticate({ role: 'owner', canManageAccess: false, canConnectCalendar: true, google: { configured: true, connected: false, mode: 'web' } }); fresh.renderConnection();
   assert.equal(fresh.$('#connect-google').hidden, false); assert.equal(fresh.calls.length, 0);
+  assert.equal(fresh.$('#connect-google .button-label').textContent, 'Connect Google');
+  assert.match(fresh.$('#calendar-description').textContent, /Calendar and enable Gmail sending in the same permission step/);
+  assert.match(fresh.$('#calendar-description').textContent, /cannot read your inbox/);
   assert.match(fresh.$('#calendar-description').textContent, /signing in or accepting an invitation does not connect a calendar/);
   fresh.respond('/api/admin/google/connect', { url: 'https://accounts.google.com/o/oauth2/v2/auth?scope=calendar' });
   await fresh.connectGoogle(); assert.equal(fresh.calls.length, 1);

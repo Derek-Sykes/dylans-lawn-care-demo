@@ -4,6 +4,10 @@ Validation date: September 10, 2026. The original sections below concern the loc
 
 ## Customer email controls — September 11, local validation
 
+The user's final setup clarification combines Calendar and send-only Gmail in one explicit **Connect Google** consent. Ordinary workspace sign-in remains identity-only. Eight focused combined-connection tests passed with race detection (3.114s), covering one callback saving both records atomically, partial consent and wrong-account rejection, legacy Calendar/booking preservation, identity-only sign-in, and rejecting an old refresh token that lacks either required capability. Existing Calendar-only installs retain an **Enable Gmail** upgrade action. The earlier separate-Gmail controls below refer to that upgrade/repair path; a fresh full connection needs only the combined consent.
+
+The complete Go race suite passed again after the combined-connection change (35.684 seconds). The 16 email, 27 admin access and admin refresh checks also passed with the combined-connection labels and consent expectations.
+
 The `dev` source adds an **Emails** panel for the shared Gmail sender, automatic customer updates and a single configurable reminder. These results cover local checks; live release evidence is recorded separately.
 
 `scripts/test-admin-email.cjs` passed all **16** checks against the actual admin controller and an isolated in-memory DOM/API fixture. It makes no network calls and never sends a message. The existing **27** admin access checks and admin refresh suite also passed after integration; JavaScript syntax and scoped whitespace checks passed.

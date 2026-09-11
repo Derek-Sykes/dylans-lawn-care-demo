@@ -1,11 +1,11 @@
 # Appointment email
 
-Appointment emails use the assigned Calendar account's Gmail, with an additional, explicit send-only permission. This feature belongs to the development booking application. The static main/demo website and its release workflow are unchanged.
+Appointment emails use the assigned Calendar account's Gmail. The workspace's explicit **Connect Google** action requests Calendar and send-only Gmail permissions together in one consent flow. This feature belongs to the development booking application. The static main/demo website and its release workflow are unchanged.
 
 ## Set up the sender
 
-1. The assigned Calendar account holder signs into the admin workspace and opens **Emails**.
-2. Choose **Connect Gmail**, then approve sending email from that same Google account. Portal sign-in and Calendar connection do not grant this permission automatically.
+1. Sign into the admin workspace. For a fresh workspace, the intended calendar account holder chooses **Connect Google** under **Google Calendar** and approves both Calendar permissions and sending email. The application saves the shared calendar connection and email sender together. Ordinary portal sign-in and invitation acceptance request identity permissions only.
+2. Open **Emails**. A new combined connection is already ready here. If an older installation has Calendar connected without Gmail permission, that account holder chooses **Enable Gmail** here or **Reconnect Google** in the Calendar panel and approves the additional permission once.
 3. Use **Send test email** to send a message to the connected sender account. The test cannot target an arbitrary address and does not email a customer.
 4. Enable **Automatic appointment emails**, choose the reminder preference, and save. Automation starts disabled. The default reminder preference is one reminder 24 hours before a confirmed appointment; the available choices are 1, 2, 6, 12, 24 or 48 hours.
 
@@ -46,11 +46,11 @@ Once a send has started, changing a booking or disabling emails cannot retract a
 
 ## Disconnecting and privacy
 
-Turning automatic emails off skips pending automatic messages. Disconnecting the email sender also removes this installation's encrypted Gmail grant and invalidates pending Gmail consent. It leaves Calendar connected and does not revoke the Google project's entire authorization.
+Turning automatic emails off skips pending automatic messages. Disconnecting the email sender also removes this installation's encrypted credential record used for sending and invalidates pending consent that would reconnect email. It leaves Calendar connected and does not revoke the Google project's entire authorization.
 
-Disconnecting Google from the Calendar panel removes both local grants and stops automatic emails. Google's revoke operation applies to the user's authorization for the whole Google project, including other OAuth clients under that project; another installation using the same Google account/project may need to reconnect. Existing portal accounts, appointments and history remain. Reconnecting Gmail does not automatically restore discarded outgoing messages. See [Google token revocation](https://developers.google.com/identity/protocols/oauth2/web-server#tokenrevoke).
+Disconnecting Google from the Calendar panel removes both local credential records and stops automatic emails. Google's revoke operation applies to the user's authorization for the whole Google project, including other OAuth clients under that project; another installation using the same Google account/project may need to reconnect. Existing portal accounts, appointments and history remain. Reconnecting Gmail does not automatically restore discarded outgoing messages. See [Google token revocation](https://developers.google.com/identity/protocols/oauth2/web-server#tokenrevoke).
 
-The app requests send-only Gmail access. It does not read the inbox, inspect delivery/bounce messages, or use inbox-reading permissions to reconcile uncertain sends. Gmail receives the recipient and message content, and sent messages remain subject to the account's normal Gmail behavior. Locally stored message bodies, recipients, status and provider references are part of the installation's private business records. The sender's tokens are encrypted separately from Calendar tokens. Complete volume backups must include the matching encryption key. See [privacy](PRIVACY.md) and [backup operations](LOCAL_OPERATIONS.md).
+The app requests send-only Gmail access. It does not read the inbox, inspect delivery/bounce messages, or use inbox-reading permissions to reconcile uncertain sends. Gmail receives the recipient and message content, and sent messages remain subject to the account's normal Gmail behavior. Locally stored message bodies, recipients, status and provider references are part of the installation's private business records. Calendar and email credentials have separate encrypted storage records but can contain the same Google tokens from the combined consent. Disconnecting only email removes the record the sending code uses; it does not remove Gmail permission from the remaining Google authorization. Complete volume backups must include the matching encryption key. See [privacy](PRIVACY.md) and [backup operations](LOCAL_OPERATIONS.md).
 
 ## Validation scope
 

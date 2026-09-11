@@ -37,8 +37,10 @@ test('only the Calendar identity can connect or disconnect Gmail; co-owners mana
   assert.equal(f.calls[1].method, 'PUT'); assert.equal(f.calls[1].headers['X-CSRF-Token'], 'fixture-csrf');
 });
 
-test('Gmail connect uses its separate endpoint, validates Google redirects and leaves Calendar alone', async () => {
+test('existing Calendar installs can enable Gmail once without replacing the Calendar grant', async () => {
   const f = await ready({ connection: { ...connection, connected: false } });
+  assert.equal(f.$('#connect-email .button-label').textContent, 'Enable Gmail');
+  assert.match(f.$('#email-connection-description').textContent, /Calendar is already set up/);
   f.respond('/api/admin/email/connect', { url: 'https://accounts.google.com/o/oauth2/v2/auth?scope=gmail.send' }); await f.connectEmail();
   assert.equal(f.calls[1].url, '/api/admin/email/connect'); assert.deepEqual(f.calls[1].body, {});
   assert.equal(f.calls.some(call => call.url === '/api/admin/google/connect'), false);
@@ -184,5 +186,5 @@ test('invalid responses and failed saves preserve drafts with a recoverable mess
 
 (async () => {
   for (const { name, run } of tests) { try { await run(); } catch (error) { error.message = `${name}: ${error.message}`; throw error; } }
-  console.log(`Admin email checks passed (${tests.length}): separate Gmail consent, shared preferences, sender-only tests, truthful statuses, deliberate retries, reminder choices, privacy and stale responses.`);
+  console.log(`Admin email checks passed (${tests.length}): existing-calendar Gmail upgrade, shared preferences, sender-only tests, truthful statuses, deliberate retries, reminder choices, privacy and stale responses.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

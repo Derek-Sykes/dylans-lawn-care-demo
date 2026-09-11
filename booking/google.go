@@ -19,7 +19,8 @@ import (
 
 const eventsScope = "https://www.googleapis.com/auth/calendar.app.created"
 const busyScope = "https://www.googleapis.com/auth/calendar.freebusy"
-const googleScopes = "openid email " + eventsScope + " " + busyScope
+const calendarScopes = "openid email " + eventsScope + " " + busyScope
+const googleScopes = calendarScopes + " " + gmailSendScope
 const clientConfigurationError = "Google requires private desktop client configuration. Ask the installation operator to complete setup."
 
 var errWrongOwner = errors.New("different Google owner")
@@ -223,12 +224,16 @@ func (g *Google) connect(ctx context.Context, code, verifier, redirect string) e
 func (g *Google) connectAs(ctx context.Context, code, verifier, redirect, expectedSub string) error {
 	return g.connectAuthorized(ctx, code, verifier, redirect, expectedSub, nil, nil)
 }
-func (g *Google) connectAuthorized(ctx context.Context, code, verifier, redirect, expectedSub string, authorize func() bool, authorizeTx func(*sql.Tx) bool) error {
+func (g *Google) connectAuthorized(ctx context.Context, code, verifier, redirect, expectedSub string, authorize func() bool, authorizeTx func(*sql.Tx) bool, connectMail ...bool) error {
 	reply, err := g.tokenRequest(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {redirect}})
 	if err != nil {
 		return err
 	}
 	if !validScopes(reply.Scope) {
+		return errScopes
+	}
+	withMail := len(connectMail) == 1 && connectMail[0]
+	if withMail && !hasMailScope(reply.Scope) {
 		return errScopes
 	}
 	info, err := g.userIdentity(ctx, reply.AccessToken)
@@ -253,9 +258,16 @@ func (g *Google) connectAuthorized(ctx context.Context, code, verifier, redirect
 		return errWrongOwner
 	}
 	if reply.RefreshToken == "" {
-		var previous GoogleTokens
-		if g.store.getSecret("google_tokens", &previous) == nil {
-			reply.RefreshToken = previous.Refresh
+		if withMail {
+			var previous mailGrant
+			if g.store.getSecret("google_mail_tokens", &previous) == nil && previous.Subject == info.Sub && normalizeAccessEmail(previous.Email) == normalizeAccessEmail(info.Email) && hasMailScope(previous.Tokens.Scope) && validScopes(previous.Tokens.Scope) {
+				reply.RefreshToken = previous.Tokens.Refresh
+			}
+		} else {
+			var previous GoogleTokens
+			if g.store.getSecret("google_tokens", &previous) == nil {
+				reply.RefreshToken = previous.Refresh
+			}
 		}
 	}
 	if reply.RefreshToken == "" {
@@ -300,6 +312,15 @@ func (g *Google) connectAuthorized(ctx context.Context, code, verifier, redirect
 	}
 	if err = g.store.writeTxSecret(tx, "google_tokens", tokens); err != nil {
 		return err
+	}
+	if withMail {
+		grant := mailGrant{Subject: owner.Sub, Email: owner.Email, Tokens: tokens}
+		if err = g.store.writeTxSecret(tx, "google_mail_tokens", grant); err != nil {
+			return err
+		}
+		if _, err = tx.Exec("INSERT INTO meta(key,value) VALUES('mail_error','\"\"') ON CONFLICT(key) DO UPDATE SET value='\"\"'"); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.Exec("INSERT INTO meta(key,value) VALUES('bootstrap_disabled','true') ON CONFLICT(key) DO UPDATE SET value='true'"); err != nil {
 		return err

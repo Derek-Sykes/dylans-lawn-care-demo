@@ -314,8 +314,11 @@ func TestGmailOAuthIsSeparateBoundSingleUseAndDisconnectable(t *testing.T) {
 	if q.Get("scope") != "openid email "+gmailSendScope || q.Get("code_challenge_method") != "S256" || q.Get("include_granted_scopes") != "false" || q.Get("access_type") != "offline" {
 		t.Fatal("Gmail consent has wrong scopes or PKCE")
 	}
-	if strings.Contains(a.google.signInURL("state", "verifier", "redirect"), "gmail") || strings.Contains(a.google.authorizationURL("state", "verifier", "redirect"), "gmail") {
-		t.Fatal("Gmail permission leaked into ordinary sign-in or Calendar consent")
+	if strings.Contains(a.google.signInURL("state", "verifier", "redirect"), "gmail") {
+		t.Fatal("Gmail permission leaked into ordinary sign-in")
+	}
+	if !strings.Contains(a.google.authorizationURL("state", "verifier", "redirect"), "gmail") {
+		t.Fatal("combined Google connection must request Gmail permission")
 	}
 	wrong := *binding
 	wrong.Value = "different-browser"

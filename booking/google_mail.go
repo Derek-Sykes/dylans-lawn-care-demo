@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,8 +19,9 @@ import (
 
 const gmailSendScope = "https://www.googleapis.com/auth/gmail.send"
 
-// Mail has its own explicit consent and encrypted grant. Portal sign-in and
-// Calendar connection never silently authorize sending from someone's inbox.
+// The workspace connection explicitly requests Calendar and Gmail together.
+// Stored grants stay separate so this installation can stop email independently.
+// Portal identity sign-in never requests these business-account permissions.
 type mailGrant struct {
 	Subject string       `json:"subject"`
 	Email   string       `json:"email"`
@@ -122,6 +124,11 @@ func (s *Store) dropMailGrant() error {
 	}
 	return tx.Commit()
 }
+func validMailVersionTx(tx *sql.Tx, expected string) bool {
+	var raw []byte
+	var version string
+	return expected != "" && tx.QueryRow("SELECT value FROM meta WHERE key='mail_authorization_version'").Scan(&raw) == nil && json.Unmarshal(raw, &version) == nil && version == expected
+}
 func (a *App) connectMail(ctx context.Context, code string, record OAuthState) error {
 	g := a.google
 	reply, err := g.tokenRequest(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {record.Verifier}, "redirect_uri": {record.RedirectURI}})
@@ -147,9 +154,7 @@ func (a *App) connectMail(ctx context.Context, code string, record OAuthState) e
 		return err
 	}
 	defer tx.Rollback()
-	var rawVersion []byte
-	var version string
-	if tx.QueryRow("SELECT value FROM meta WHERE key='mail_authorization_version'").Scan(&rawVersion) != nil || json.Unmarshal(rawVersion, &version) != nil || version == "" || version != record.MailVersion {
+	if !validMailVersionTx(tx, record.MailVersion) {
 		return errWrongOwner
 	}
 	var owner Owner

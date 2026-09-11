@@ -25,6 +25,7 @@ type OAuthState struct {
 	ActorEmail   string `json:"actorEmail"`
 	InvitationID string `json:"invitationId"`
 	MailVersion  string `json:"mailVersion,omitempty"`
+	ConnectMail  bool   `json:"connectMail,omitempty"`
 }
 
 func (a *App) cookieName() string {
@@ -195,7 +196,12 @@ func (a *App) handleConnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &apiError{403, "calendar_owner_required", "Only the calendar owner can change this connection."})
 		return
 	}
-	a.beginOAuth(w, r, OAuthState{Purpose: "calendar", SessionID: sessionID, ActorSubject: s.Subject, ActorEmail: s.Email})
+	version, err := a.store.mailAuthorizationVersion()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	a.beginOAuth(w, r, OAuthState{Purpose: "calendar", SessionID: sessionID, ActorSubject: s.Subject, ActorEmail: s.Email, ConnectMail: true, MailVersion: version})
 }
 func (a *App) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	var in struct{}
@@ -303,7 +309,9 @@ func (a *App) handleCallback(w http.ResponseWriter, r *http.Request) {
 		err = a.google.connectAuthorized(r.Context(), code, record.Verifier, record.RedirectURI, record.ActorSubject, func() bool {
 			current, e := a.sessionByID(record.SessionID)
 			return e == nil && current.Subject == record.ActorSubject && current.Email == record.ActorEmail && a.canConnectCalendar(current)
-		}, func(tx *sql.Tx) bool { return a.authorizeCalendarTx(tx, record) })
+		}, func(tx *sql.Tx) bool {
+			return a.authorizeCalendarTx(tx, record) && (!record.ConnectMail || validMailVersionTx(tx, record.MailVersion))
+		}, record.ConnectMail)
 		if err == nil {
 			owner, e := a.google.owner()
 			if e != nil {
