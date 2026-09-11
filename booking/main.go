@@ -11,6 +11,9 @@ import (
 func main() {
 	log.SetFlags(0)
 	if len(os.Args) > 1 {
+		if os.Args[1] == "operator-config" {
+			os.Exit(runOperatorConfigCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, loadConfig))
+		}
 		os.Exit(runGoogleConfigCommand(os.Args[1:], os.Stdin, os.Stderr, loadConfig))
 	}
 	config, err := loadConfig()

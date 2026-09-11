@@ -13,7 +13,7 @@
     document.querySelector('meta[name="description"]').content = 'Request an estimate or a callback from Dylan’s Lawn Care. Share your property details and choose a short conversation before booking the work.';
     $('#booking-eyebrow').textContent = 'REQUEST AN ESTIMATE OR CALLBACK';
     const emphasis = document.createElement('em'); emphasis.textContent = 'project.';
-    $('#booking-heading').replaceChildren('Plan your', document.createElement('br'), 'next ', emphasis);
+    $('#booking-heading').replaceChildren('Plan your ', document.createElement('br'), 'next ', emphasis);
     $('#booking-introduction').textContent = 'Need a price or some advice before booking the work? Share your property details and choose a time for Dylan to call you.';
     $('#booking-scope').textContent = 'This reserves a short estimate or callback conversation. Book a service when you’re ready to schedule the work.';
     $('#service-description').textContent = 'What would you like an estimate or advice about?';

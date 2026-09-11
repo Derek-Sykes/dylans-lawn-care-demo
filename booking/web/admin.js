@@ -1,12 +1,16 @@
 'use strict';
 (() => {
-  // The bootstrap credential never remains in the URL, DOM or browser storage.
-  let bootstrapToken = new URLSearchParams(window.location.hash.slice(1)).get('setup');
+  // Private credentials are removed before any request and never enter browser storage.
+  const entryFragment = new URLSearchParams(window.location.hash.slice(1));
+  let invitationToken = entryFragment.get('invite');
+  let bootstrapToken = invitationToken ? null : entryFragment.get('setup');
+  entryFragment.delete('invite'); entryFragment.delete('setup');
   if (window.location.hash) history.replaceState(null, '', window.location.pathname + window.location.search);
   const oauthOutcome = new URLSearchParams(window.location.search).get('google');
   if (oauthOutcome) { const url = new URL(window.location.href); url.searchParams.delete('google'); history.replaceState(null, '', url.pathname + url.search); }
   const $ = selector => document.querySelector(selector);
   const state = { session: null, sessionEpoch: 0, sessionRequest: 0, refreshingSession: false, csrf: '', settings: null, bookings: [], bookingRevision: 0, activePanel: 'bookings', selectedId: null, dirty: false, saving: false, loadingBookings: false, connecting: false, configuring: false, disconnecting: false, replacingConfiguration: false, poll: null };
+  Object.assign(state, { invitations: [], invitationLink: null, pendingRevokeId: null, invitationRevision: 0, loadingInvitations: false, savingInvitation: false });
   state.activeKind = 'service';
   const statusNames = { needs_followup: 'Needs contact', contacted: 'Contacted', confirmed: 'Confirmed', cancelled: 'Cancelled' };
   const kindOf = booking => booking.kind === 'estimate' ? 'estimate' : 'service';
@@ -48,16 +52,22 @@
     const connected = Boolean(google.connected);
     const needsAttention = Boolean(google.error);
     const configurationRequired = Boolean(state.session?.authenticated && google.requiresClientConfiguration);
+    const initialSetup = state.session?.role === 'bootstrap';
+    const canConnect = Boolean(state.session?.authenticated && state.session.canConnectCalendar && !initialSetup);
+    const canManage = Boolean(state.session?.authenticated && state.session.canManageAccess);
     $('#sidebar-dot').classList.toggle('connected', connected && !needsAttention);
     $('#sidebar-connection').textContent = needsAttention ? 'Calendar needs attention' : connected ? 'Calendar connected' : 'Calendar disconnected';
     $('#calendar-badge').textContent = needsAttention ? 'Needs attention' : connected ? 'Connected' : google.configured ? 'Not connected' : 'Setup needed';
     $('#calendar-badge').className = `badge ${connected && !needsAttention ? 'success' : 'warning'}`;
-    $('#calendar-title').textContent = needsAttention ? 'Your calendar needs attention.' : connected ? 'You’re connected.' : 'Bring your calendar along.';
-    $('#calendar-description').textContent = connected ? 'Requests go into a dedicated booking calendar in Google Calendar. Busy times from your primary calendar and booking calendar are kept out of your available slots.' : google.configured ? 'Connect your Google account to make online times available. This portal manages its own booking calendar and checks your primary calendar for busy times.' : 'Google Calendar setup is not available on this installation yet. You can still manage availability and existing requests here.';
-    $('#calendar-email').textContent = google.email || ''; $('#calendar-email').hidden = !google.email;
-    $('#connect-google').hidden = connected && !needsAttention; $('#connect-google').disabled = !google.configured || configurationRequired || state.connecting || state.configuring || state.disconnecting;
-    const canImport = Boolean(state.session?.authenticated && google.mode === 'desktop' && google.configured);
+    $('#calendar-title').textContent = needsAttention ? 'The calendar needs attention.' : connected ? 'The booking calendar is connected.' : 'Connect the owner’s calendar.';
+    $('#calendar-description').textContent = connected ? 'Requests go into a dedicated booking calendar. Busy times from that account’s primary calendar and booking calendar stay out of the available slots.' : google.configured ? canConnect ? 'Connect the owner’s Google Calendar to make online times available. This is separate from signing in to the portal.' : 'The calendar owner needs to sign in and connect Google Calendar before customers can book online. Your portal access stays the same.' : 'Google Calendar setup is not available on this installation yet. You can still manage availability and existing requests here.';
+    $('#calendar-email').textContent = google.email ? `Calendar account: ${google.email}` : ''; $('#calendar-email').hidden = !google.email;
+    $('#connect-google').hidden = !canConnect || (connected && !needsAttention); $('#connect-google').disabled = !google.configured || configurationRequired || state.connecting || state.configuring || state.disconnecting;
+    $('#connect-google .button-label').textContent = connected && needsAttention ? 'Reconnect Google Calendar' : 'Connect Google Calendar';
+    const canImport = Boolean(state.session?.authenticated && (canManage || initialSetup) && google.mode === 'desktop' && google.configured);
     const showConfiguration = canImport && (configurationRequired || state.replacingConfiguration);
+    const configurationSlot = $(initialSetup ? '#entry-configuration' : '#calendar-configuration-slot');
+    if ($('#google-configuration').parentElement !== configurationSlot) configurationSlot.append($('#google-configuration'));
     $('#google-configuration').hidden = !showConfiguration;
     $('#replace-google-configuration').hidden = !canImport || configurationRequired || showConfiguration;
     $('#replace-google-configuration').disabled = state.configuring || state.connecting || state.disconnecting;
@@ -65,11 +75,19 @@
     $('#configuration-title').textContent = configurationRequired ? 'Add your private Google configuration.' : 'Replace your private Google configuration.';
     $('#configuration-fields').disabled = state.configuring;
     $('#import-google-configuration').disabled = state.configuring || !$('#google-configuration-file').files.length;
-    $('#disconnect-google').hidden = !connected;
+    $('#disconnect-google').hidden = !connected || !canConnect;
+    if (initialSetup) $('#signin-google').disabled = configurationRequired || state.configuring || state.connecting;
     if (google.error) message('#calendar-message', String(google.error), 'error'); else message('#calendar-message', '');
     const publicURL = validPublicURL(state.session?.publicOrigin);
     $('#public-site-link').hidden = !publicURL;
     if (publicURL) $('#public-site-link').href = publicURL;
+    $('#session-identity').textContent = state.session?.authenticated ? `${state.session.actorEmail || 'Installation access'} · ${state.session.role === 'owner' ? 'Owner' : state.session.role === 'bootstrap' ? 'Setup' : 'Operator'}` : '';
+    $('#session-identity').hidden = !state.session?.authenticated;
+    $('#access-nav').hidden = !canManage;
+    if (!canManage) {
+      clearInvitationLink(); state.pendingRevokeId = null; state.invitations = []; $('#invitation-list').replaceChildren();
+      if (state.activePanel === 'access') switchPanel('bookings');
+    }
   }
   function invalidateSessionRefresh() { state.sessionRequest++; state.refreshingSession = false; }
   async function refreshSession() {
@@ -94,6 +112,10 @@
     const previous = state.session;
     state.session = previous ? { authenticated: false, setupRequired: previous.setupRequired, google: { configured: Boolean(previous.google?.configured), connected: Boolean(previous.google?.connected), mode: previous.google?.mode } } : null;
     state.csrf = ''; state.bookings = []; state.settings = null; state.selectedId = null; state.dirty = false; state.saving = false; state.loadingBookings = false; state.connecting = false; state.configuring = false; state.disconnecting = false; state.replacingConfiguration = false;
+    state.invitations = []; state.pendingRevokeId = null; state.invitationRevision++; state.loadingInvitations = false; state.savingInvitation = false;
+    clearInvitationLink(); $('#invitation-list').replaceChildren(); $('#invitation-list').setAttribute('aria-busy', 'false'); $('#invitation-form').reset(); $('#invitation-fields').disabled = false; $('#refresh-invitations').disabled = false;
+    $('#create-invitation .button-label').textContent = 'Create invitation';
+    $('#session-identity').textContent = ''; $('#session-identity').hidden = true; $('#access-nav').hidden = true; $('#access-panel').hidden = true;
     if (dialog.open) dialog.close();
     $('#booking-detail').replaceChildren(); $('#detail-notes').value = ''; $('#booking-list').replaceChildren();
     $('#booking-dialog-title').textContent = 'Request details';
@@ -108,13 +130,17 @@
     $('#logout').disabled = false; $('#signin-google').disabled = false; $('#disconnect-google').disabled = false; $('#refresh-bookings').disabled = false;
     $('#settings-state').textContent = ''; $('#request-count').textContent = '0'; $('#estimate-count').textContent = '0';
     ['#stat-followup', '#stat-confirmed', '#stat-calendar'].forEach(selector => { $(selector).textContent = '—'; });
-    ['#booking-detail-message', '#calendar-refresh-message', '#bookings-message', '#settings-message', '#calendar-message', '#configuration-message', '#page-message'].forEach(selector => message(selector, ''));
+    ['#booking-detail-message', '#calendar-refresh-message', '#bookings-message', '#settings-message', '#calendar-message', '#configuration-message', '#invitation-message', '#invitations-message', '#page-message'].forEach(selector => message(selector, ''));
     $('#portal').hidden = true; $('#logout').hidden = true; $('#loading-view').hidden = true; $('#signin-view').hidden = false;
-    const signInAvailable = Boolean(state.session?.google?.configured && !state.session?.setupRequired);
+    const signInAvailable = Boolean(state.session?.google?.configured);
     $('#signin-google').hidden = !signInAvailable;
-    $('#signin-copy').textContent = signInAvailable ? 'Sign in with the Google account already connected to this portal.' : 'Open this installation\'s private setup link to sign in securely. Your access stays private to this installation.';
+    $('#signin-copy').textContent = invitationToken ? 'You have a private owner invitation. Continue with the Google account this invitation was sent to.' : signInAvailable ? 'Sign in with your approved Google account to manage bookings and availability. Signing in does not change the connected calendar.' : 'Google sign-in is not ready on this installation. Ask the person who set up the portal to finish its private setup.';
+    $('#signin-google .button-label').textContent = invitationToken ? 'Accept invitation with Google' : 'Sign in with Google';
+    switchPanel('bookings', false, 'service');
   }
   function switchPanel(panel, focus = false, kind = state.activeKind) {
+    if (panel === 'access' && !state.session?.canManageAccess) return;
+    if (state.activePanel === 'access' && panel !== 'access') { clearInvitationLink(); state.pendingRevokeId = null; renderInvitations(); message('#invitation-message', ''); }
     state.activePanel = panel;
     if (panel === 'bookings') state.activeKind = kind === 'estimate' ? 'estimate' : 'service';
     document.querySelectorAll('.workspace-panel').forEach(element => { element.hidden = element.id !== `${panel}-panel`; });
@@ -123,6 +149,7 @@
     if (focus) $(`#${panel}-heading`).focus();
     if (panel === 'calendar') refreshSession();
     if (panel === 'bookings') loadBookings(true);
+    if (panel === 'access') { refreshSession(); loadInvitations(); }
   }
   function formatDate(value, timeOnly = false) {
     const date = new Date(value);
@@ -308,8 +335,8 @@
     return result;
   }
   function renderSettings(settings) {
-    state.settings = { ...settings, blockedWeekly: Array.isArray(settings.blockedWeekly) ? settings.blockedWeekly : [], blockedDates: Array.isArray(settings.blockedDates) ? settings.blockedDates : [] };
-    for (const key of ['businessName', 'timeZone', 'slotMinutes', 'estimateMinutes', 'bufferMinutes', 'minNoticeHours', 'horizonDays']) $('#settings-form').elements.namedItem(key).value = settings[key];
+    state.settings = { ...settings, externalBufferMinutes: settings.externalBufferMinutes ?? 30, blockedWeekly: Array.isArray(settings.blockedWeekly) ? settings.blockedWeekly : [], blockedDates: Array.isArray(settings.blockedDates) ? settings.blockedDates : [] };
+    for (const key of ['businessName', 'timeZone', 'slotMinutes', 'estimateMinutes', 'bufferMinutes', 'externalBufferMinutes', 'minNoticeHours', 'horizonDays']) $('#settings-form').elements.namedItem(key).value = state.settings[key];
     renderWeekly(settings.weekly || []); $('#date-exceptions').replaceChildren(); (settings.exceptions || []).forEach(appendException); $('#exceptions-empty').hidden = Boolean((settings.exceptions || []).length);
     $('#time-off-rows').replaceChildren(); state.settings.blockedWeekly.forEach(block => appendTimeOff(block, 'weekly')); state.settings.blockedDates.forEach(block => appendTimeOff(block, 'date')); updateTimeOffSummary(); $('#time-off-panel').open = $('#time-off-rows').children.length > 0;
     state.dirty = false; $('#settings-fields').disabled = false; $('#save-settings').disabled = false; $('#reset-settings').disabled = false; $('#reset-settings').textContent = 'Discard changes'; $('#settings-state').textContent = 'All changes saved'; renderBookings();
@@ -323,7 +350,7 @@
     const values = new FormData($('#settings-form')); const settings = { businessName: values.get('businessName').trim(), timeZone: values.get('timeZone').trim(), weekly: [], exceptions: [] };
     if (!settings.businessName) throw new Error('Enter your business name.');
     try { new Intl.DateTimeFormat('en-US', { timeZone: settings.timeZone }).format(); } catch { throw new Error('Enter a valid time zone, such as America/New_York.'); }
-    for (const key of ['slotMinutes', 'estimateMinutes', 'bufferMinutes', 'minNoticeHours', 'horizonDays']) settings[key] = Number(values.get(key));
+    for (const key of ['slotMinutes', 'estimateMinutes', 'bufferMinutes', 'externalBufferMinutes', 'minNoticeHours', 'horizonDays']) settings[key] = Number(values.get(key));
     document.querySelectorAll('.weekly-day').forEach(row => {
       if (!row.querySelector('.day-enabled').checked) return;
       const weekday = Number(row.dataset.weekday); const windows = [];
@@ -347,12 +374,114 @@
     Object.assign(settings, timeOffSettings(blocks));
     return settings;
   }
-  async function connectGoogle() {
-    if (state.connecting || state.configuring || state.disconnecting || (state.session?.authenticated && state.session.google?.requiresClientConfiguration)) return; invalidateSessionRefresh(); state.connecting = true; $('#connect-google').disabled = true; $('#signin-google').disabled = true;
-    const epoch = state.sessionEpoch;
-    try { const data = await api('/api/admin/google/connect', { method: 'POST', body: {} }); if (epoch !== state.sessionEpoch) return; const url = new URL(data?.url); if (url.protocol !== 'https:' || url.hostname !== 'accounts.google.com') throw new APIError('Google sign-in could not be opened. Please try again.'); window.location.assign(url.href); }
-    catch (error) { if (epoch === state.sessionEpoch) { state.connecting = false; $('#signin-google').disabled = false; renderConnection(); message(state.session?.authenticated ? '#calendar-message' : '#page-message', error.message, 'error'); } }
+  function clearInvitationLink() {
+    state.invitationLink = null; $('#invitation-link').value = ''; $('#invitation-result-description').textContent = ''; $('#invitation-result').hidden = true;
   }
+  function invitationTime(value) {
+    return Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Expiry unavailable';
+  }
+  function renderInvitations(focusId = '', focusAction = '') {
+    const fragment = document.createDocumentFragment();
+    let focusTarget = null;
+    if (!focusId && document.activeElement?.dataset?.invitationId) { focusId = document.activeElement.dataset.invitationId; focusAction = document.activeElement.dataset.invitationAction; }
+    if (!state.invitations.length) fragment.append(node('p', 'empty-state', 'No invitations yet. Create a private link when the owner is ready.'));
+    state.invitations.forEach(invitation => {
+      const row = node('article', 'invitation-row'); const details = node('div');
+      const status = invitation.status === 'pending' && Date.parse(invitation.expiresAt) <= Date.now() ? 'expired' : invitation.status;
+      const heading = node('h3', '', invitation.email); heading.tabIndex = -1;
+      details.append(heading, node('p', 'small muted', `${status === 'pending' ? 'Expires' : 'Expiry'} ${invitationTime(invitation.expiresAt)} · your local time`));
+      row.append(details, badge(({ pending: 'Awaiting acceptance', used: 'Accepted', revoked: 'Revoked', expired: 'Expired' })[status] || 'Status unavailable', status === 'used' ? 'success' : status === 'pending' ? 'warning' : 'neutral'));
+      function action(label, className, actionName, handler) {
+        const button = node('button', className, label); button.type = 'button'; button.disabled = state.savingInvitation;
+        button.dataset.invitationId = invitation.id; button.dataset.invitationAction = actionName;
+        button.addEventListener('click', handler);
+        if (invitation.id === focusId && actionName === focusAction) focusTarget = button;
+        return button;
+      }
+      if (status === 'pending') {
+        if (state.pendingRevokeId === invitation.id) {
+          const confirmation = node('div', 'invitation-confirmation'); confirmation.setAttribute('role', 'group'); confirmation.setAttribute('aria-label', `Revoke invitation for ${invitation.email}`);
+          const actions = node('div', 'invitation-confirm-actions');
+          actions.append(action(state.savingInvitation ? 'Revoking…' : 'Confirm revocation', 'button button-danger', 'confirm', () => revokeInvitation(invitation)), action('Keep invitation', 'button button-secondary', 'keep', () => { if (state.savingInvitation) return; state.pendingRevokeId = null; renderInvitations(invitation.id, 'revoke'); }));
+          confirmation.append(node('p', 'small muted', 'This private link will stop working.'), actions); row.append(confirmation);
+        } else {
+          const revoke = action('Revoke', 'button button-quiet', 'revoke', () => { if (state.savingInvitation || !state.session?.canManageAccess) return; state.pendingRevokeId = invitation.id; message('#invitation-message', ''); renderInvitations(invitation.id, 'confirm'); });
+          revoke.setAttribute('aria-label', `Revoke invitation for ${invitation.email}`); row.append(revoke);
+        }
+      } else if (invitation.id === focusId) {
+        focusTarget = heading;
+      }
+      fragment.append(row);
+    });
+    $('#invitation-list').replaceChildren(fragment);
+    if (state.activePanel === 'access' && focusTarget && !focusTarget.disabled) focusTarget.focus();
+  }
+  async function loadInvitations() {
+    if (!state.session?.authenticated || !state.session.canManageAccess || state.loadingInvitations || state.savingInvitation) return false;
+    const epoch = state.sessionEpoch; const revision = state.invitationRevision;
+    state.loadingInvitations = true; $('#refresh-invitations').disabled = true;
+    try {
+      const data = await api('/api/admin/invitations');
+      if (epoch !== state.sessionEpoch || revision !== state.invitationRevision || !state.session?.canManageAccess) return false;
+      if (!Array.isArray(data?.invitations) || data.invitations.some(item => !item || typeof item.id !== 'string' || typeof item.email !== 'string' || !['pending', 'used', 'revoked', 'expired'].includes(item.status))) throw new APIError('Invitations could not be read. Please refresh.');
+      state.invitations = data.invitations;
+      if (state.invitationLink && !state.invitations.some(item => item.id === state.invitationLink.id && item.status === 'pending' && Date.parse(item.expiresAt) > Date.now())) clearInvitationLink();
+      if (state.pendingRevokeId && !state.invitations.some(item => item.id === state.pendingRevokeId && item.status === 'pending' && Date.parse(item.expiresAt) > Date.now())) state.pendingRevokeId = null;
+      renderInvitations(); message('#invitations-message', ''); return true;
+    } catch (error) { if (epoch === state.sessionEpoch && revision === state.invitationRevision) message('#invitations-message', error.message, 'error'); return false; }
+    finally { if (epoch === state.sessionEpoch) { state.loadingInvitations = false; $('#refresh-invitations').disabled = false; } }
+  }
+  function lockInvitations(locked) {
+    state.savingInvitation = locked; $('#invitation-fields').disabled = locked; $('#refresh-invitations').disabled = locked; $('#invitation-list').setAttribute('aria-busy', String(locked)); renderInvitations();
+  }
+  async function createInvitation(event) {
+    event.preventDefault();
+    if (!state.session?.authenticated || !state.session.canManageAccess || state.savingInvitation || !$('#invitation-form').reportValidity()) return;
+    const email = $('#invitation-email').value.trim();
+    if (!email) return;
+    const epoch = state.sessionEpoch; state.invitationRevision++;
+    clearInvitationLink(); state.pendingRevokeId = null; lockInvitations(true); message('#invitation-message', ''); $('#create-invitation .button-label').textContent = 'Creating…';
+    try {
+      const data = await api('/api/admin/invitations', { method: 'POST', body: { email } });
+      if (epoch !== state.sessionEpoch || !state.session?.canManageAccess) return;
+      const invitation = data?.invitation; const url = new URL(data?.url);
+      if (!invitation || typeof invitation.id !== 'string' || typeof invitation.email !== 'string' || invitation.status !== 'pending' || !Number.isFinite(Date.parse(invitation.expiresAt)) || url.origin !== new URL(window.location.href).origin || !new URLSearchParams(url.hash.slice(1)).get('invite')) throw new APIError('The invitation may have been created, but its private link could not be read. Refresh the history and create a replacement for the same email.');
+      state.invitations = state.invitations.map(item => item.status === 'pending' ? { ...item, status: 'revoked' } : item);
+      state.invitations.unshift(invitation);
+      if (state.activePanel === 'access') {
+        state.invitationLink = { id: invitation.id, url: url.href }; $('#invitation-link').value = url.href;
+        $('#invitation-result-description').textContent = `For ${invitation.email}. Expires ${invitationTime(invitation.expiresAt)} (your local time).`;
+        $('#invitation-result').hidden = false; $('#copy-invitation').focus();
+      }
+      message('#invitation-message', state.activePanel === 'access' ? 'Invitation created. Copy the link and share it privately.' : 'Invitation created. Create a replacement to show a new private link.', 'success');
+    } catch (error) { if (epoch === state.sessionEpoch) message('#invitation-message', error instanceof TypeError ? 'The invitation result could not be read. Refresh the history before creating a replacement for the same email.' : error.message, 'error'); }
+    finally { if (epoch === state.sessionEpoch) { lockInvitations(false); $('#create-invitation .button-label').textContent = 'Create invitation'; } }
+  }
+  async function revokeInvitation(invitation) {
+    if (!state.session?.authenticated || !state.session.canManageAccess || state.savingInvitation || state.pendingRevokeId !== invitation.id || !state.invitations.some(item => item.id === invitation.id && item.status === 'pending')) return;
+    const epoch = state.sessionEpoch; state.invitationRevision++;
+    lockInvitations(true); message('#invitation-message', '');
+    try {
+      await api(`/api/admin/invitations/${encodeURIComponent(invitation.id)}`, { method: 'DELETE' });
+      if (epoch !== state.sessionEpoch || !state.session?.canManageAccess) return;
+      state.invitations = state.invitations.map(item => item.id === invitation.id ? { ...item, status: 'revoked' } : item);
+      if (state.invitationLink?.id === invitation.id) clearInvitationLink();
+      message('#invitation-message', 'Invitation revoked. Its link can no longer be accepted.', 'success');
+    } catch (error) { if (epoch === state.sessionEpoch) message('#invitation-message', error.message, 'error'); }
+    finally { if (epoch === state.sessionEpoch) { const restoreFocus = state.pendingRevokeId === invitation.id && state.activePanel === 'access'; if (state.invitations.some(item => item.id === invitation.id && item.status === 'revoked')) state.pendingRevokeId = null; lockInvitations(false); if (restoreFocus) renderInvitations(invitation.id, 'confirm'); } }
+  }
+  async function openGoogle(path, body) {
+    if (state.connecting || state.configuring || state.disconnecting) return;
+    invalidateSessionRefresh(); state.connecting = true; $('#connect-google').disabled = true; $('#signin-google').disabled = true;
+    const epoch = state.sessionEpoch;
+    try { const data = await api(path, { method: 'POST', body }); if (epoch !== state.sessionEpoch) return; const url = new URL(data?.url); if (url.protocol !== 'https:' || url.hostname !== 'accounts.google.com') throw new APIError('Google sign-in could not be opened. Please try again.'); invitationToken = null; window.location.assign(url.href); }
+    catch (error) { if (epoch === state.sessionEpoch) { state.connecting = false; $('#signin-google').disabled = false; renderConnection(); message(state.session?.authenticated && !$('#portal').hidden ? '#calendar-message' : '#page-message', error.message, 'error'); } }
+  }
+  function connectGoogle() {
+    if (!state.session?.authenticated || state.session.role === 'bootstrap' || !state.session.canConnectCalendar || state.session.google?.requiresClientConfiguration) return;
+    return openGoogle('/api/admin/google/connect', {});
+  }
+  function signInGoogle() { return invitationToken ? openGoogle('/api/admin/invitations/accept', { token: invitationToken }) : openGoogle('/api/admin/signin', {}); }
   async function start() {
     const epoch = ++state.sessionEpoch;
     invalidateSessionRefresh();
@@ -364,7 +493,13 @@
       if (epoch !== state.sessionEpoch) return;
       if (!session || typeof session.authenticated !== 'boolean') throw new APIError('Your session could not be checked. Please try again.');
       state.session = session; state.csrf = session.csrfToken || ''; renderConnection();
-      if (!session.authenticated) showSignedOut();
+      if (!session.authenticated || invitationToken) showSignedOut();
+      else if (session.role === 'bootstrap') {
+        $('#portal').hidden = true; $('#signin-view').hidden = false; $('#logout').hidden = false;
+        $('#signin-google').hidden = !session.google?.configured; $('#signin-google').disabled = Boolean(session.google?.requiresClientConfiguration);
+        $('#signin-google .button-label').textContent = 'Finish setup with Google';
+        $('#signin-copy').textContent = session.google?.requiresClientConfiguration ? 'Your private setup link is verified. Import the private Google configuration below, then finish setup with Google.' : session.google?.configured ? 'Your private setup link is verified. Sign in with the Google account that will manage this installation. The calendar connection is a separate step.' : 'Your private setup link is verified. Google sign-in still needs configuration from the person setting up this installation.';
+      }
       else {
         $('#portal').hidden = false; $('#logout').hidden = false; $('#signin-view').hidden = true;
         const results = await Promise.allSettled([loadBookings(), loadSettings()]);
@@ -372,39 +507,56 @@
         if (results.some(result => result.status === 'rejected')) message('#page-message', 'Some portal information could not be loaded. Refresh to try again.', 'error');
         schedulePoll();
       }
-      const outcomes = { denied: 'Google connection was cancelled. Your existing settings are unchanged.', failed: 'Google could not be connected. Open Google Calendar in the portal to try again.', wrong_account: 'That Google account does not match this portal’s owner. Sign in with the connected owner account.', missing_scopes: 'Google Calendar permissions were not completed. Connect again and allow the requested calendar access.', configuration_required: 'Google sign-in needs a one-time setup on this installation. Ask the person who set up this portal to finish the private Google connection settings, then try again.' };
+      const outcomes = { denied: 'Google sign-in was cancelled. Try again, or reopen the private link if you were accepting an invitation.', failed: 'Google could not complete this request. Try signing in again, or reopen your private invitation link to accept it.', wrong_account: 'That Google account does not have access for this request. Use your approved account. If you were accepting an invitation, reopen its private link and choose the exact invited email.', invalid_invitation: 'This invitation is not valid. Ask the operator for a new private link.', invitation_expired: 'This invitation has expired. Ask the operator for a new private link.', invitation_revoked: 'This invitation has been revoked. Ask the operator for a new private link.', invitation_used: 'This invitation has already been accepted. Sign in with your approved Google account.', owner_transfer_required: 'This portal already has another calendar owner or saved appointments. Ask the operator to arrange a calendar ownership transfer before accepting this invitation.', missing_scopes: 'Google Calendar permissions were not completed. Connect again and allow the requested calendar access.', configuration_required: 'Google sign-in needs a one-time setup on this installation. Ask the person who set up this portal to finish the private Google connection settings, then try again.' };
       if (outcomes[oauthOutcome]) message('#page-message', outcomes[oauthOutcome], oauthOutcome === 'denied' ? '' : 'error');
-      if (oauthOutcome && session.authenticated) switchPanel('calendar');
+      if (['connected', 'missing_scopes', 'configuration_required'].includes(oauthOutcome) && state.session?.authenticated) switchPanel('calendar');
+      if (oauthOutcome === 'invited' && state.session?.authenticated) message('#page-message', 'Your invitation is accepted. You can now manage bookings and availability.', 'success');
     } catch (error) { if (epoch === state.sessionEpoch) { showSignedOut(); message('#page-message', error.message, 'error'); } }
     finally { if (epoch === state.sessionEpoch || !state.session?.authenticated) $('#loading-view').hidden = true; }
   }
   function schedulePoll() {
     clearTimeout(state.poll);
-    if (!state.session?.authenticated) return;
+    if (!state.session?.authenticated || state.session.role === 'bootstrap') return;
     const epoch = state.sessionEpoch;
     state.poll = setTimeout(async () => {
       if (!document.hidden) {
         await refreshSession();
         if (epoch !== state.sessionEpoch || !state.session?.authenticated) return;
         if (state.activePanel === 'bookings') await loadBookings(true);
+        if (state.activePanel === 'access' && !$('#invitation-list').contains(document.activeElement)) await loadInvitations();
       }
       if (epoch === state.sessionEpoch) schedulePoll();
     }, 60000);
   }
   function refreshVisibleBookings() {
-    if (document.hidden || !state.session?.authenticated) return;
+    if (document.hidden || !state.session?.authenticated || state.session.role === 'bootstrap') return;
     refreshSession();
     if (state.activePanel === 'bookings') loadBookings(true);
+    if (state.activePanel === 'access' && !$('#invitation-list').contains(document.activeElement)) loadInvitations();
     schedulePoll();
   }
   document.querySelectorAll('[data-panel]').forEach(button => button.addEventListener('click', () => switchPanel(button.dataset.panel, true, button.dataset.kind)));
   $('#session-retry').addEventListener('click', start);
+  $('#invitation-form').addEventListener('submit', createInvitation);
+  $('#refresh-invitations').addEventListener('click', loadInvitations);
+  $('#hide-invitation').addEventListener('click', () => { clearInvitationLink(); message('#invitation-message', 'Private link hidden.'); $('#invitation-email').focus(); });
+  $('#copy-invitation').addEventListener('click', async () => {
+    const link = state.invitationLink; const epoch = state.sessionEpoch;
+    if (!link || !state.session?.canManageAccess) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(link.url);
+      if (epoch === state.sessionEpoch && state.invitationLink === link) message('#invitation-message', 'Private link copied. Share it only with the invited owner.', 'success');
+    } catch {
+      if (epoch === state.sessionEpoch && state.invitationLink === link) { $('#invitation-link').focus(); $('#invitation-link').select(); message('#invitation-message', 'Select and copy the private link below. Automatic copying is unavailable in this browser.'); }
+    }
+  });
   $('#replace-google-configuration').addEventListener('click', () => { state.replacingConfiguration = true; message('#configuration-message', ''); renderConnection(); $('#google-configuration-file').focus(); });
   $('#cancel-configuration').addEventListener('click', () => { state.replacingConfiguration = false; $('#google-configuration-file').value = ''; message('#configuration-message', ''); renderConnection(); $('#replace-google-configuration').focus(); });
   $('#google-configuration-file').addEventListener('change', () => { message('#configuration-message', ''); renderConnection(); });
   $('#google-configuration-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (state.configuring || state.connecting || state.disconnecting || !state.session?.authenticated) return;
+    if (state.configuring || state.connecting || state.disconnecting || !state.session?.authenticated || (!state.session.canManageAccess && state.session.role !== 'bootstrap')) return;
     const file = $('#google-configuration-file').files[0];
     if (!file) { message('#configuration-message', 'Choose the private Google configuration JSON file first.', 'error'); return; }
     const epoch = state.sessionEpoch;
@@ -435,11 +587,15 @@
       if (epoch === state.sessionEpoch) {
         state.configuring = false; $('#import-google-configuration .button-label').textContent = 'Import configuration';
         renderConnection();
-        if (imported && !state.session?.google?.requiresClientConfiguration && !state.replacingConfiguration) { message('#calendar-message', state.session.google?.connected && !state.session.google?.error ? 'Private Google configuration saved. Google Calendar is connected.' : 'Private Google configuration saved. You can now connect Google Calendar.', 'success'); $($('#connect-google').hidden ? '#replace-google-configuration' : '#connect-google').focus(); }
+        if (imported && !state.session?.google?.requiresClientConfiguration && !state.replacingConfiguration) {
+          const initialSetup = state.session.role === 'bootstrap';
+          message(initialSetup ? '#page-message' : '#calendar-message', initialSetup ? 'Private Google configuration saved. Finish setup with Google to continue.' : state.session.google?.connected && !state.session.google?.error ? 'Private Google configuration saved. Google Calendar is connected.' : 'Private Google configuration saved. You can now connect Google Calendar.', 'success');
+          $(initialSetup ? '#signin-google' : $('#connect-google').hidden ? '#replace-google-configuration' : '#connect-google').focus();
+        }
       }
     }
   });
-  $('#connect-google').addEventListener('click', connectGoogle); $('#signin-google').addEventListener('click', connectGoogle);
+  $('#connect-google').addEventListener('click', connectGoogle); $('#signin-google').addEventListener('click', signInGoogle);
   $('#refresh-bookings').addEventListener('click', () => { loadBookings(); refreshSession(); });
   $('#booking-filter').addEventListener('change', renderBookings); $('#booking-search').addEventListener('input', renderBookings);
   $('#close-booking').addEventListener('click', () => dialog.close());
@@ -462,7 +618,7 @@
     finally { if (epoch === state.sessionEpoch) { $('#settings-fields').disabled = false; $('#save-settings').disabled = false; $('#reset-settings').disabled = false; } }
   });
   $('#disconnect-google').addEventListener('click', async () => {
-    if (state.disconnecting || state.configuring || state.connecting) return;
+    if (state.disconnecting || state.configuring || state.connecting || !state.session?.canConnectCalendar) return;
     if (!window.confirm('Disconnect Google Calendar? Online times will be unavailable until you reconnect. Existing calendar events will remain.')) return;
     const epoch = state.sessionEpoch;
     invalidateSessionRefresh(); state.disconnecting = true; $('#disconnect-google').disabled = true;
@@ -479,7 +635,7 @@
     finally { if (epoch === state.sessionEpoch) $('#logout').disabled = false; }
   });
   window.addEventListener('beforeunload', event => { if (state.dirty && state.session?.authenticated) { event.preventDefault(); event.returnValue = ''; } });
-  window.addEventListener('pagehide', showSignedOut);
+  window.addEventListener('pagehide', () => { invitationToken = null; bootstrapToken = null; showSignedOut(); });
   window.addEventListener('pageshow', event => { if (event.persisted) { showSignedOut(); start(); } });
   window.addEventListener('focus', refreshVisibleBookings);
   document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(state.poll); else refreshVisibleBookings(); });

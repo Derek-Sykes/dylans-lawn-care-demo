@@ -32,17 +32,18 @@ type BlockedDatePeriod struct {
 	End    string `json:"end,omitempty"`
 }
 type Settings struct {
-	BusinessName    string                `json:"businessName"`
-	TimeZone        string                `json:"timeZone"`
-	SlotMinutes     int                   `json:"slotMinutes"`
-	EstimateMinutes int                   `json:"estimateMinutes"`
-	BufferMinutes   int                   `json:"bufferMinutes"`
-	MinNoticeHours  int                   `json:"minNoticeHours"`
-	HorizonDays     int                   `json:"horizonDays"`
-	Weekly          []WeeklyPeriod        `json:"weekly"`
-	Exceptions      []DateException       `json:"exceptions"`
-	BlockedWeekly   []BlockedWeeklyPeriod `json:"blockedWeekly"`
-	BlockedDates    []BlockedDatePeriod   `json:"blockedDates"`
+	BusinessName          string                `json:"businessName"`
+	TimeZone              string                `json:"timeZone"`
+	SlotMinutes           int                   `json:"slotMinutes"`
+	EstimateMinutes       int                   `json:"estimateMinutes"`
+	BufferMinutes         int                   `json:"bufferMinutes"`
+	ExternalBufferMinutes *int                  `json:"externalBufferMinutes"`
+	MinNoticeHours        int                   `json:"minNoticeHours"`
+	HorizonDays           int                   `json:"horizonDays"`
+	Weekly                []WeeklyPeriod        `json:"weekly"`
+	Exceptions            []DateException       `json:"exceptions"`
+	BlockedWeekly         []BlockedWeeklyPeriod `json:"blockedWeekly"`
+	BlockedDates          []BlockedDatePeriod   `json:"blockedDates"`
 }
 type Slot struct {
 	Start time.Time `json:"start"`
@@ -54,7 +55,8 @@ type Busy struct {
 }
 
 func defaultSettings() Settings {
-	v := Settings{BusinessName: "Dylan’s Lawn Care", TimeZone: "America/New_York", SlotMinutes: 60, EstimateMinutes: 15, BufferMinutes: 15, MinNoticeHours: 24, HorizonDays: 30, Weekly: []WeeklyPeriod{}, Exceptions: []DateException{}, BlockedWeekly: []BlockedWeeklyPeriod{}, BlockedDates: []BlockedDatePeriod{}}
+	externalBuffer := 30
+	v := Settings{BusinessName: "Dylan’s Lawn Care", TimeZone: "America/New_York", SlotMinutes: 60, EstimateMinutes: 15, BufferMinutes: 15, ExternalBufferMinutes: &externalBuffer, MinNoticeHours: 24, HorizonDays: 30, Weekly: []WeeklyPeriod{}, Exceptions: []DateException{}, BlockedWeekly: []BlockedWeeklyPeriod{}, BlockedDates: []BlockedDatePeriod{}}
 	for d := 1; d <= 5; d++ {
 		v.Weekly = append(v.Weekly, WeeklyPeriod{d, "09:00", "17:00"})
 	}
@@ -80,7 +82,7 @@ func validateSettings(v Settings) error {
 	if _, e := time.LoadLocation(v.TimeZone); e != nil {
 		return errors.New("choose a valid IANA time zone")
 	}
-	if v.SlotMinutes < 15 || v.SlotMinutes > 240 || v.EstimateMinutes < 15 || v.EstimateMinutes > 120 || v.BufferMinutes < 0 || v.BufferMinutes > 120 || v.MinNoticeHours < 0 || v.MinNoticeHours > 720 || v.HorizonDays < 1 || v.HorizonDays > 90 {
+	if v.SlotMinutes < 15 || v.SlotMinutes > 240 || v.EstimateMinutes < 15 || v.EstimateMinutes > 120 || v.BufferMinutes < 0 || v.BufferMinutes > 120 || externalBufferMinutes(v) < 0 || externalBufferMinutes(v) > 120 || v.MinNoticeHours < 0 || v.MinNoticeHours > 720 || v.HorizonDays < 1 || v.HorizonDays > 90 {
 		return errors.New("appointment, buffer, notice or booking horizon is outside its allowed range")
 	}
 	if len(v.Weekly) > 35 || len(v.Exceptions) > 365 || len(v.BlockedWeekly) > 70 || len(v.BlockedDates) > 365 {
@@ -152,6 +154,10 @@ func validateSettings(v Settings) error {
 }
 
 func canonicalSettings(v Settings) Settings {
+	if v.ExternalBufferMinutes == nil {
+		minutes := 30
+		v.ExternalBufferMinutes = &minutes
+	}
 	if v.EstimateMinutes == 0 {
 		v.EstimateMinutes = 15
 	}
@@ -174,6 +180,13 @@ func canonicalSettings(v Settings) Settings {
 		}
 	}
 	return v
+}
+
+func externalBufferMinutes(v Settings) int {
+	if v.ExternalBufferMinutes == nil {
+		return 30
+	}
+	return *v.ExternalBufferMinutes
 }
 
 func blockedMinutes(allDay bool, start, end string) ([2]int, error) {
@@ -251,7 +264,7 @@ func wallInstant(date string, minute int, loc *time.Location) (time.Time, bool) 
 	return matches[0].UTC(), true
 }
 
-func scheduledSlots(v Settings, date string, now time.Time) ([]Slot, error) {
+func scheduledSlotsWithBusy(v Settings, date string, now time.Time, protected []Busy) ([]Slot, error) {
 	if err := validateSettings(v); err != nil {
 		return nil, err
 	}
@@ -285,26 +298,163 @@ func scheduledSlots(v Settings, date string, now time.Time) ([]Slot, error) {
 			break
 		}
 	}
-	notBefore := now.Add(time.Duration(v.MinNoticeHours) * time.Hour)
-	blocks := compileBlocks(v)
-	for _, p := range periods {
-		for minute := p[0]; minute+v.SlotMinutes <= p[1]; minute += v.SlotMinutes + v.BufferMinutes {
-			start, ok := wallInstant(date, minute, loc)
-			if !ok || start.Before(notBefore) {
-				continue
+	// Build real-time working windows minute by minute. Counting wall minutes
+	// once keeps DST ambiguity handling inexpensive, including repeated hours.
+	windows := workingWindows(day, date, periods, loc)
+	if len(windows) == 0 {
+		return out, nil
+	}
+	margin := time.Duration(max(v.BufferMinutes, externalBufferMinutes(v))) * time.Minute
+	protected = append(append([]Busy{}, protected...), blockedIntervals(v, windows[0].Start.Add(-margin), windows[len(windows)-1].End.Add(margin), loc)...)
+	protected = mergeBusy(protected)
+	notBefore := ceilMinute(now.Add(time.Duration(v.MinNoticeHours) * time.Hour))
+	for _, window := range windows {
+		for _, free := range subtractBusy(window, protected) {
+			start := ceilMinute(free.Start)
+			if start.Before(notBefore) {
+				start = notBefore
 			}
-			end, ok := wallInstant(date, minute+v.SlotMinutes, loc)
-			if !ok || end.Sub(start) != time.Duration(v.SlotMinutes)*time.Minute {
-				continue
-			}
-			slot := Slot{start, end}
-			if !blocks.overlaps(slot, v.BufferMinutes, loc) {
-				out = append(out, slot)
+			for !start.Add(time.Duration(v.SlotMinutes) * time.Minute).After(free.End) {
+				end := start.Add(time.Duration(v.SlotMinutes) * time.Minute)
+				localStart, localEnd := start.In(loc), end.In(loc)
+				startMinute := localStart.Hour()*60 + localStart.Minute()
+				endMinute := localEnd.Hour()*60 + localEnd.Minute()
+				uniqueStart, validStart := wallInstant(date, startMinute, loc)
+				uniqueEnd, validEnd := wallInstant(date, endMinute, loc)
+				if validStart && validEnd && uniqueStart.Equal(start) && uniqueEnd.Equal(end) && endMinute-startMinute == v.SlotMinutes {
+					out = append(out, Slot{start, end})
+				}
+				start = start.Add(time.Duration(v.SlotMinutes+v.BufferMinutes) * time.Minute)
 			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
 	return out, nil
+}
+
+func scheduledSlots(v Settings, date string, now time.Time) ([]Slot, error) {
+	return scheduledSlotsWithBusy(v, date, now, nil)
+}
+
+func ceilMinute(at time.Time) time.Time {
+	minute := at.Truncate(time.Minute)
+	if minute.Before(at) {
+		return minute.Add(time.Minute)
+	}
+	return minute
+}
+
+func workingWindows(day time.Time, date string, periods [][2]int, loc *time.Location) []Busy {
+	type wallMinute struct {
+		at     time.Time
+		minute int
+	}
+	minutes := []wallMinute{}
+	counts := map[int]int{}
+	for at := day.Add(-3 * time.Hour); at.Before(day.Add(30 * time.Hour)); at = at.Add(time.Minute) {
+		local := at.In(loc)
+		if local.Format("2006-01-02") != date {
+			continue
+		}
+		minute := local.Hour()*60 + local.Minute()
+		minutes = append(minutes, wallMinute{at.UTC(), minute})
+		counts[minute]++
+	}
+	windows := []Busy{}
+	for _, period := range periods {
+		var current Busy
+		previous := -2
+		for _, minute := range minutes {
+			valid := counts[minute.minute] == 1 && minute.minute >= period[0] && minute.minute < period[1]
+			if !valid || minute.minute != previous+1 {
+				if !current.Start.IsZero() {
+					windows = append(windows, current)
+					current = Busy{}
+				}
+			}
+			if valid {
+				if current.Start.IsZero() {
+					current.Start = minute.at
+				}
+				current.End = minute.at.Add(time.Minute)
+			}
+			previous = minute.minute
+		}
+		if !current.Start.IsZero() {
+			windows = append(windows, current)
+		}
+	}
+	sort.Slice(windows, func(i, j int) bool { return windows[i].Start.Before(windows[j].Start) })
+	return windows
+}
+
+func blockedIntervals(v Settings, start, end time.Time, loc *time.Location) []Busy {
+	blocks := compileBlocks(v)
+	out := []Busy{}
+	var active Busy
+	for at := start.Truncate(time.Minute); at.Before(end); at = at.Add(time.Minute) {
+		local := at.In(loc)
+		minute := local.Hour()*60 + local.Minute()
+		blocked := false
+		for _, span := range blocks.weekly[int(local.Weekday())] {
+			blocked = blocked || (minute >= span[0] && minute < span[1])
+		}
+		for _, span := range blocks.dates[local.Format("2006-01-02")] {
+			blocked = blocked || (minute >= span[0] && minute < span[1])
+		}
+		if blocked {
+			if active.Start.IsZero() {
+				active.Start = at.Add(-time.Duration(v.BufferMinutes) * time.Minute)
+			}
+			active.End = at.Add(time.Minute)
+		} else if !active.Start.IsZero() {
+			out = append(out, active)
+			active = Busy{}
+		}
+	}
+	if !active.Start.IsZero() {
+		out = append(out, active)
+	}
+	return out
+}
+
+func mergeBusy(spans []Busy) []Busy {
+	sort.Slice(spans, func(i, j int) bool { return spans[i].Start.Before(spans[j].Start) })
+	out := []Busy{}
+	for _, span := range spans {
+		if !span.End.After(span.Start) {
+			continue
+		}
+		if len(out) == 0 || span.Start.After(out[len(out)-1].End) {
+			out = append(out, span)
+		} else if span.End.After(out[len(out)-1].End) {
+			out[len(out)-1].End = span.End
+		}
+	}
+	return out
+}
+
+func subtractBusy(window Busy, blocked []Busy) []Busy {
+	out := []Busy{}
+	cursor := window.Start
+	for _, span := range blocked {
+		if !span.End.After(cursor) || !span.Start.Before(window.End) {
+			continue
+		}
+		if span.Start.After(cursor) {
+			out = append(out, Busy{cursor, span.Start})
+		}
+		if span.End.After(cursor) {
+			cursor = span.End
+		}
+		if !cursor.Before(window.End) {
+			break
+		}
+	}
+	if cursor.Before(window.End) {
+		out = append(out, Busy{cursor, window.End})
+	}
+	return out
 }
 
 func conflicts(slot Slot, buffer int, busy []Busy) bool {

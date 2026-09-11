@@ -19,9 +19,9 @@ func TestBlockedWeeklyAndDatesSubtractFromWorkingWindows(t *testing.T) {
 		{"working windows", nil, nil, "09:00,09:45,10:30,11:15,13:00,13:45,14:30,15:15,16:00"},
 		{"weekly whole day", []BlockedWeeklyPeriod{{Weekday: 1, AllDay: true}}, nil, ""},
 		{"date whole day", nil, []BlockedDatePeriod{{Date: "2026-09-14", AllDay: true}}, ""},
-		{"weekly partial", []BlockedWeeklyPeriod{{Weekday: 1, Start: "10:00", End: "11:30"}}, nil, "09:00,13:00,13:45,14:30,15:15,16:00"},
-		{"date partial", nil, []BlockedDatePeriod{{Date: "2026-09-14", Start: "14:00", End: "15:00"}}, "09:00,09:45,10:30,11:15,13:00,15:15,16:00"},
-		{"overlapping blocks form union", []BlockedWeeklyPeriod{{Weekday: 1, Start: "10:00", End: "11:00"}, {Weekday: 1, Start: "10:30", End: "11:30"}}, []BlockedDatePeriod{{Date: "2026-09-14", Start: "14:00", End: "15:00"}, {Date: "2026-09-14", Start: "14:30", End: "15:00"}}, "09:00,13:00,15:15,16:00"},
+		{"weekly partial", []BlockedWeeklyPeriod{{Weekday: 1, Start: "10:00", End: "11:30"}}, nil, "09:00,11:30,13:00,13:45,14:30,15:15,16:00"},
+		{"date partial", nil, []BlockedDatePeriod{{Date: "2026-09-14", Start: "14:00", End: "15:00"}}, "09:00,09:45,10:30,11:15,13:00,15:00,15:45,16:30"},
+		{"overlapping blocks form union", []BlockedWeeklyPeriod{{Weekday: 1, Start: "10:00", End: "11:00"}, {Weekday: 1, Start: "10:30", End: "11:30"}}, []BlockedDatePeriod{{Date: "2026-09-14", Start: "14:00", End: "15:00"}, {Date: "2026-09-14", Start: "14:30", End: "15:00"}}, "09:00,11:30,13:00,15:00,15:45,16:30"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := defaultSettings()
@@ -205,7 +205,7 @@ func TestBlockedSlotsCannotBeBookedAndGoogleStillWins(t *testing.T) {
 	}
 	f.busy = []Busy{{instant("2026-09-14T13:45:00Z"), instant("2026-09-14T14:15:00Z")}}
 	slots, _, err := a.availableSlots(context.Background(), "2026-09-14")
-	if err != nil || len(slots) == 0 || !slots[0].Start.Equal(instant("2026-09-14T14:30:00Z")) {
+	if err != nil || len(slots) == 0 || !slots[0].Start.Equal(instant("2026-09-14T14:45:00Z")) {
 		t.Fatal("explicit blocks or Google conflict were ignored")
 	}
 }

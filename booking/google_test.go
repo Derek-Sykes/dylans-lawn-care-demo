@@ -17,7 +17,7 @@ import (
 
 type googleFixture struct {
 	mu                                                           sync.Mutex
-	sub, scope, tokenError                                       string
+	sub, email, scope, tokenError                                string
 	verified, calendarMissing, busyError, loseInsert, loseDelete bool
 	tokenCalls, refreshCalls, creates, inserts, deletes          int
 	lastVerifier, lastSecret                                     string
@@ -27,7 +27,7 @@ type googleFixture struct {
 
 func mockGoogle(t *testing.T, a *App) *googleFixture {
 	t.Helper()
-	f := &googleFixture{sub: "owner-sub", scope: googleScopes, verified: true, events: map[string]map[string]any{}}
+	f := &googleFixture{sub: "owner-sub", email: "owner@example.com", scope: googleScopes, verified: true, events: map[string]map[string]any{}}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -48,7 +48,7 @@ func mockGoogle(t *testing.T, a *App) *googleFixture {
 			}
 			writeJSON(w, 200, map[string]any{"access_token": "fixture-access", "refresh_token": "fixture-refresh", "expires_in": 3600, "scope": f.scope})
 		case r.URL.Path == "/userinfo":
-			writeJSON(w, 200, map[string]any{"sub": f.sub, "email": "owner@example.com", "email_verified": f.verified})
+			writeJSON(w, 200, map[string]any{"sub": f.sub, "email": f.email, "email_verified": f.verified})
 		case r.URL.Path == "/calendar/v3/calendars" && r.Method == "POST":
 			f.creates++
 			writeJSON(w, 200, map[string]string{"id": "fixture-booking-calendar"})
@@ -133,16 +133,22 @@ func mockGoogle(t *testing.T, a *App) *googleFixture {
 	return f
 }
 func beginOAuth(t *testing.T, a *App, cookie *http.Cookie, csrf string) (url.Values, *http.Cookie) {
+	return beginAuthRequest(t, a, "/api/admin/google/connect", nil, cookie, csrf)
+}
+func beginSignIn(t *testing.T, a *App, cookie *http.Cookie, csrf string) (url.Values, *http.Cookie) {
+	return beginAuthRequest(t, a, "/api/admin/signin", map[string]string{}, cookie, csrf)
+}
+func beginAuthRequest(t *testing.T, a *App, path string, body any, cookie *http.Cookie, csrf string) (url.Values, *http.Cookie) {
 	t.Helper()
-	w := request(a, true, "POST", "/api/admin/google/connect", nil, cookie, csrf, a.cfg.AdminOrigin)
+	w := request(a, true, "POST", path, body, cookie, csrf, a.cfg.AdminOrigin)
 	if w.Code != 200 {
 		t.Fatalf("connect status %d", w.Code)
 	}
-	var body map[string]string
-	if json.Unmarshal(w.Body.Bytes(), &body) != nil {
+	var response map[string]string
+	if json.Unmarshal(w.Body.Bytes(), &response) != nil {
 		t.Fatal("invalid connect response")
 	}
-	u, err := url.Parse(body["url"])
+	u, err := url.Parse(response["url"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,14 +240,14 @@ func TestOAuthReturningOwnerExpiryAndMissingSecret(t *testing.T) {
 	if w = callback(a, q, binding); !strings.Contains(w.Header().Get("Location"), "google=connected") || f.lastSecret == "" {
 		t.Fatal("optional private desktop configuration was not used")
 	}
-	q, binding = beginOAuth(t, a, nil, "")
+	q, binding = beginSignIn(t, a, nil, "")
 	f.sub = "different-owner"
 	if w = callback(a, q, binding); !strings.Contains(w.Header().Get("Location"), "google=wrong_account") {
 		t.Fatal("open Google self-registration allowed")
 	}
 	f.sub = "owner-sub"
-	q, binding = beginOAuth(t, a, nil, "")
-	if w = callback(a, q, binding); !strings.Contains(w.Header().Get("Location"), "google=connected") || f.creates != 1 {
+	q, binding = beginSignIn(t, a, nil, "")
+	if w = callback(a, q, binding); !strings.Contains(w.Header().Get("Location"), "google=signed_in") || f.creates != 1 {
 		t.Fatal("returning owner did not reuse calendar")
 	}
 }

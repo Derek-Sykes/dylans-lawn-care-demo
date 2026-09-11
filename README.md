@@ -24,11 +24,11 @@ macOS, Linux or Git Bash:
 ./website start
 ~~~
 
-Windows users can also double-click **start.bat**. The command builds and verifies both images, starts the app, automatically retrieves missing Google application configuration using Git, prints the public and admin addresses, and opens the admin workspace with the private setup credential in a URL fragment. The admin page consumes and removes that fragment. The credential is never printed by the launcher.
+Windows users can also double-click **start.bat**. The command builds and verifies both images, starts the app, automatically retrieves missing Google application configuration using Git, prints the public and admin addresses, and opens the admin workspace for Google sign-in. Only a genuinely unconfigured installation uses the private initial-setup fragment; the launcher never prints it.
 
 Preferred addresses are **http://127.0.0.1:4177/** for customers and **http://127.0.0.1:4178/** for the admin workspace. If either port is occupied, the launcher chooses an available port and remembers it. Each fresh clone receives its own install ID, Docker project and database volume, so two copies can run together. Both addresses bind only to this computer.
 
-On a fresh installation, `start` retrieves `google-client.json` from the `main` branch of the private `Derek-Sykes/xsolutions-booking-private` repository. It uses the laptop's existing Git authentication, validates the configuration and stores it encrypted in this install's persistent data volume. The owner then clicks **Connect Google Calendar** and signs in normally. No manual file import is needed when the private repository is provisioned and the Git account has access. The private file must be added once by the application operator; see [Google configuration and operator setup](docs/GOOGLE_OAUTH.md).
+On a fresh installation, `start` retrieves `google-client.json` and `operator-access.json` from the `dev` branch of the private `Derek-Sykes/xsolutions-booking-private` repository. It uses the laptop's existing Git authentication, validates the configuration and stores it encrypted in this install's persistent data volume. The approved operator then clicks **Sign in with Google**. They can invite the business owner or connect their own Calendar for a separate testing installation. No manual file import is needed when the private repository is provisioned and the Git account has access. The private file must be added once by the application operator; see [Google configuration and operator setup](docs/GOOGLE_OAUTH.md).
 
 Existing configured installations skip the private fetch entirely, including during updates. GitHub credentials stay with Git on the host; personal Google tokens and customer data never enter either GitHub repository. The public desktop client ID in this source is not a secret. An account's ability to clone this public website does not grant access to the private configuration repository. If private configuration is missing or access is denied, startup reports the problem before opening the admin portal rather than claiming Google setup succeeded.
 
@@ -36,7 +36,9 @@ Customers use **Book an appointment** in the navigation or homepage to choose a 
 
 Changing a booking’s start or end in its dedicated Google Calendar updates the portal and public availability. The owner view refreshes about once a minute while visible, or immediately with **Refresh**. Edits preserve the individual appointment duration, buffer and follow-up status; a Calendar deletion cancels the matching request.
 
-The owner sets regular working days and hours, date exceptions, and optional time off for recurring breaks or specific dates. Available appointments are working hours minus time off, existing reservations and Google Calendar conflicts. Saved requests include contact and property details, private follow-up notes, and separate customer-follow-up and Calendar-sync statuses. See [validation results](docs/BOOKING_VALIDATION.md).
+The owner sets regular working days and hours, date exceptions, and optional time off for recurring breaks or specific dates. Appointment starts follow actual free stretches of the day. Other Google Calendar events have a separately adjustable **30-minute buffer** by default; customer appointments retain the independently adjustable **15-minute gap**. With working hours of 9–7 and a personal event ending at 5, the first hour-long job can start at 5:30. Each free stretch then follows the selected appointment length plus the business gap. Saved requests retain contact details, private follow-up notes and separate customer-follow-up and Calendar-sync statuses. See [validation results](docs/BOOKING_VALIDATION.md).
+
+The portal separates the **operator** from the **business owner**. Both sign in with their approved Google accounts; only the operator can generate an expiring, single-use invitation for the owner. Calendar connection is separate from portal sign-in. The private configuration includes the operator's approved Google identity, not personal Calendar tokens. See [admin access and first-time owner setup](docs/ADMIN_ACCESS.md).
 
 | Task | PowerShell | Bash |
 |---|---|---|
@@ -48,7 +50,7 @@ The owner sets regular working days and hours, date exceptions, and optional tim
 | Stop this install, keep its data | `.\website.ps1 stop` | `./website stop` |
 | Status and both addresses | `.\website.ps1 status` | `./website status` |
 | Recent app logs | `.\website.ps1 logs` | `./website logs` |
-| Reopen private admin setup | `.\website.ps1 open` | `./website open` |
+| Open the admin portal | `.\website.ps1 open` | `./website open` |
 
 Append `-NoOpen` in PowerShell or `--no-open` in Bash to suppress browser opening. The existing Windows batch shortcuts remain supported. Keep Docker running while using the app. Closing a launcher window does not stop the app.
 

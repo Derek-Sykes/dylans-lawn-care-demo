@@ -169,7 +169,10 @@ func (s *Store) byIdempotency(key string) (Booking, error) {
 	return scanBooking(s.db.QueryRow("SELECT "+bookingColumns+" FROM bookings WHERE idempotency_key=?", s.hash(key)))
 }
 func (s *Store) localBusy(start, end time.Time) ([]Busy, error) {
-	rows, err := s.db.Query("SELECT start,blocked_end FROM bookings WHERE (status!='cancelled' OR calendar_status!='synced') AND start<? AND blocked_end>?", end.Unix(), start.Unix())
+	return s.localBusyExcept(start, end, "")
+}
+func (s *Store) localBusyExcept(start, end time.Time, excludeID string) ([]Busy, error) {
+	rows, err := s.db.Query("SELECT start,blocked_end FROM bookings WHERE (status!='cancelled' OR calendar_status!='synced') AND start<? AND blocked_end>? AND id!=?", end.Unix(), start.Unix(), excludeID)
 	if err != nil {
 		return nil, err
 	}
@@ -214,27 +217,42 @@ func (a *App) availableSlots(ctx context.Context, date string, kinds ...string) 
 	if err = a.refreshCalendar(ctx, true); err != nil {
 		return nil, v, errUnavailable
 	}
-	start := slots[0].Start.Add(-time.Duration(v.BufferMinutes) * time.Minute)
-	end := slots[len(slots)-1].End.Add(time.Duration(v.BufferMinutes) * time.Minute)
-	busy, err := a.calendar.Busy(ctx, start, end)
+	loc, _ := time.LoadLocation(v.TimeZone)
+	day, _ := time.ParseInLocation("2006-01-02", date, loc)
+	margin := time.Duration(max(v.BufferMinutes, externalBufferMinutes(v))) * time.Minute
+	start, end := day.Add(-margin), day.AddDate(0, 0, 1).Add(margin)
+	var busy []Busy
+	if provider, ok := a.calendar.(interface {
+		ExternalBusy(context.Context, time.Time, time.Time) ([]Busy, error)
+	}); ok {
+		busy, err = provider.ExternalBusy(ctx, start, end)
+	} else {
+		busy, err = a.calendar.Busy(ctx, start, end)
+	}
 	if err != nil {
 		return nil, v, errUnavailable
-	}
-	for i := range busy {
-		busy[i].End = busy[i].End.Add(time.Duration(v.BufferMinutes) * time.Minute)
 	}
 	local, err := a.store.localBusy(start, end)
 	if err != nil {
 		return nil, v, err
 	}
-	busy = append(busy, local...)
-	out := []Slot{}
-	for _, s := range slots {
-		if !conflicts(s, v.BufferMinutes, busy) {
-			out = append(out, s)
-		}
+	protected := calendarProtection(v, v.BufferMinutes, busy, local)
+	slots, err = scheduledSlotsWithBusy(schedule, date, a.now(), protected)
+	return slots, v, err
+}
+
+// A personal-calendar gap and a customer-appointment gap are independent rules.
+// Existing local End values already include their saved following buffer.
+func calendarProtection(v Settings, businessGap int, external, business []Busy) []Busy {
+	out := make([]Busy, 0, len(external)+len(business))
+	ext := time.Duration(externalBufferMinutes(v)) * time.Minute
+	for _, span := range external {
+		out = append(out, Busy{span.Start.Add(-ext), span.End.Add(ext)})
 	}
-	return out, v, nil
+	for _, span := range business {
+		out = append(out, Busy{span.Start.Add(-time.Duration(businessGap) * time.Minute), span.End})
+	}
+	return mergeBusy(out)
 }
 
 func (a *App) createBooking(ctx context.Context, in BookingInput) (Booking, bool, error) {
@@ -260,11 +278,7 @@ func (a *App) createBooking(ctx context.Context, in BookingInput) (Booking, bool
 		return Booking{}, false, err
 	}
 	loc, _ := time.LoadLocation(v.TimeZone)
-	schedule := v
-	if in.Kind == "estimate" {
-		schedule.SlotMinutes = v.EstimateMinutes
-	}
-	slots, err := scheduledSlots(schedule, start.In(loc).Format("2006-01-02"), a.now())
+	slots, v, err := a.availableSlots(ctx, start.In(loc).Format("2006-01-02"), in.Kind)
 	if err != nil {
 		return Booking{}, false, err
 	}
@@ -278,23 +292,7 @@ func (a *App) createBooking(ctx context.Context, in BookingInput) (Booking, bool
 	if selected.Start.IsZero() {
 		return Booking{}, false, errConflict
 	}
-	if !a.calendar.Connected() {
-		return Booking{}, false, errUnavailable
-	}
-	if err = a.refreshCalendar(ctx, true); err != nil {
-		return Booking{}, false, errUnavailable
-	}
 	buffer := time.Duration(v.BufferMinutes) * time.Minute
-	busy, err := a.calendar.Busy(ctx, start.Add(-buffer), selected.End.Add(buffer))
-	if err != nil {
-		return Booking{}, false, errUnavailable
-	}
-	for i := range busy {
-		busy[i].End = busy[i].End.Add(buffer)
-	}
-	if conflicts(selected, v.BufferMinutes, busy) {
-		return Booking{}, false, errConflict
-	}
 	id := bookingID()
 	now := a.now().UTC()
 	_, err = a.store.db.ExecContext(ctx, `INSERT INTO bookings(id,idempotency_key,payload_hash,start,end,blocked_end,service_id,name,email,phone,address,notes,created_at,event_id,kind) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, a.store.hash(in.IdempotencyKey), hash, start.Unix(), selected.End.Unix(), selected.End.Add(buffer).Unix(), in.ServiceID, in.Name, in.Email, in.Phone, in.Address, in.Notes, now.Unix(), "d"+id, in.Kind)

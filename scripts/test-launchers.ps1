@@ -50,16 +50,20 @@ function Launch([string]$Clone,[string]$Action,[switch]$Bash,[switch]$Refuse,[st
     Write-Host "$Action completed for $(Split-Path $Clone -Leaf)."
   } finally { Pop-Location }
 }
-function Authenticate([hashtable]$Settings) {
-  $origin = "http://127.0.0.1:$($Settings.DYLAN_ADMIN_PORT)"
-  $session = Invoke-RestMethod "$origin/api/admin/bootstrap" -Method Post -ContentType application/json -Headers @{Origin=$origin} -Body (@{token=$Settings.BOOTSTRAP_TOKEN} | ConvertTo-Json) -SessionVariable webSession
-  return @{Origin=$origin;Session=$webSession;Csrf=$session.csrfToken}
+function SettingsFixture([hashtable]$Settings) {
+  # Launcher tests exercise persistent storage without faking a Google login.
+  # Authentication/CSRF and operator permissions have separate application tests.
+  if ($Settings.DYLAN_PROJECT -notmatch '^dylan-launcher-test-[a-f0-9]{10}-[ab]$') { throw 'Refused settings access outside an isolated launcher fixture.' }
+  return @{Volume="$($Settings.DYLAN_PROJECT)_booking-data"}
 }
 function ReadOwnerSettings([hashtable]$Auth) {
-  return Invoke-RestMethod "$($Auth.Origin)/api/admin/settings" -WebSession $Auth.Session
+  $output = & docker run --rm --network none --mount "type=volume,source=$($Auth.Volume),target=/data,readonly" python:3.14-alpine python -c 'import sqlite3; c=sqlite3.connect("file:/data/booking.sqlite?mode=ro",uri=True); v=c.execute("SELECT value FROM meta WHERE key=?",("settings",)).fetchone()[0]; print(v.decode() if isinstance(v,bytes) else v)'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not read isolated fixture settings.' }
+  return $output | ConvertFrom-Json
 }
 function SaveOwnerSettings([hashtable]$Auth,$Settings) {
-  Invoke-RestMethod "$($Auth.Origin)/api/admin/settings" -Method Put -WebSession $Auth.Session -Headers @{Origin=$Auth.Origin;'X-CSRF-Token'=$Auth.Csrf} -ContentType application/json -Body ($Settings | ConvertTo-Json -Depth 10) | Out-Null
+  $Settings | ConvertTo-Json -Depth 10 -Compress | & docker run --rm -i --network none --mount "type=volume,source=$($Auth.Volume),target=/data" python:3.14-alpine python -c 'import json,sqlite3,sys; v=json.load(sys.stdin); c=sqlite3.connect("/data/booking.sqlite"); c.execute("UPDATE meta SET value=? WHERE key=?",(json.dumps(v).encode(),"settings")); c.commit()'
+  if ($LASTEXITCODE -ne 0) { throw 'Could not save isolated fixture settings.' }
 }
 function CleanProject([string]$Project) {
   $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
@@ -73,7 +77,7 @@ function CleanProject([string]$Project) {
 try {
   # Only fixture copies receive this local URL. Production launchers keep a fixed GitHub destination.
   New-Item -ItemType Directory -Path $privateFixture -Force | Out-Null
-  Native git @('-C',$privateFixture,'init','--initial-branch=main')
+  Native git @('-C',$privateFixture,'init','--initial-branch=dev')
   Native git @('-C',$privateFixture,'config','user.name','Isolated launcher test')
   Native git @('-C',$privateFixture,'config','user.email','launcher-test@example.invalid')
   [IO.File]::WriteAllText((Join-Path $privateFixture 'README.md'),'Dummy private setup fixture; never a real credential.')
@@ -118,13 +122,14 @@ try {
   $preferredAdmin = if ($occupied -eq 65535) {1024} else {$occupied+1}
   [IO.File]::WriteAllText((Join-Path $cloneA '.env'), (@("DYLAN_PROJECT=$projectA","DYLAN_PORT=$occupied","DYLAN_ADMIN_PORT=$preferredAdmin",'') -join [char]10))
   [IO.File]::WriteAllText((Join-Path $cloneB '.env'), (@("DYLAN_PROJECT=$projectB","DYLAN_PORT=$occupied","DYLAN_ADMIN_PORT=$preferredAdmin",'') -join [char]10))
-  Launch $cloneA start -Refuse -ExpectedMessage 'needs a valid google-client.json on main'
-  Launch $cloneB start -Bash:([bool]$BashPath) -Refuse -ExpectedMessage 'needs a valid google-client.json on main'
+  Launch $cloneA start -Refuse -ExpectedMessage 'needs a valid google-client.json on dev'
+  Launch $cloneB start -Bash:([bool]$BashPath) -Refuse -ExpectedMessage 'needs a valid google-client.json on dev'
   Record 'Missing private file fails safely in both launchers and removes the temporary checkout'
   $publicClient = Get-Content -LiteralPath (Join-Path $seed 'booking/config/google-client.json') -Raw | ConvertFrom-Json
   $dummyJSON = @{installed=@{client_id=$publicClient.client_id;client_secret=$dummySecret}} | ConvertTo-Json -Depth 3
   [IO.File]::WriteAllText((Join-Path $privateFixture 'google-client.json'),$dummyJSON,(New-Object Text.UTF8Encoding($false)))
-  Native git @('-C',$privateFixture,'add','google-client.json')
+  [IO.File]::WriteAllText((Join-Path $privateFixture 'operator-access.json'),'{"schema":1,"googleSub":"launcher-fixture-operator","email":"operator@example.com"}',(New-Object Text.UTF8Encoding($false)))
+  Native git @('-C',$privateFixture,'add','google-client.json','operator-access.json')
   Native git @('-C',$privateFixture,'commit','-m','Add synthetic test-only client configuration')
   Launch $cloneA start -ExpectedMessage 'Google connection configuration saved privately'
   Launch $cloneB start -Bash:([bool]$BashPath) -ExpectedMessage 'Google connection configuration saved privately'
@@ -138,7 +143,7 @@ try {
   Record 'Occupied ports and two simultaneous clones select separate loopback addresses'
   [IO.File]::WriteAllText((Join-Path $cloneA '.env'), "DYLAN_PROJECT=$projectA$([char]10)")
   [IO.File]::WriteAllText((Join-Path $cloneB '.env'), "DYLAN_PROJECT=$projectB$([char]10)")
-  $auth = Authenticate $stateA
+  $auth = SettingsFixture $stateA
   $settings = ReadOwnerSettings $auth
   $settings.businessName = "Persistence check $runId"
   SaveOwnerSettings $auth $settings
@@ -147,7 +152,7 @@ try {
   Launch $cloneA start
   $restarted = State $cloneA
   if ((Get-FileHash -LiteralPath (Join-Path $cloneA '.local/runtime.env')).Hash -ne $stateHash) { throw 'Restart changed saved identity, ports or credential.' }
-  $auth = Authenticate $restarted
+  $auth = SettingsFixture $restarted
   if ((ReadOwnerSettings $auth).businessName -ne $settings.businessName) { throw 'Restart lost database settings.' }
   Record 'Stop/start retains ports, install secret and database settings'
   Record 'Configured installs restart with their private Git source unavailable'
@@ -173,7 +178,7 @@ try {
   $expected = (& git -C $seed rev-parse HEAD).Trim()
   if ($head -ne $expected) { throw 'Fast-forward update did not follow the local fixture remote.' }
   if ((Get-FileHash -LiteralPath (Join-Path $cloneA '.local/runtime.env')).Hash -ne $stateHash) { throw 'Update changed saved state.' }
-  $auth = Authenticate (State $cloneA)
+  $auth = SettingsFixture (State $cloneA)
   if ((ReadOwnerSettings $auth).businessName -ne $settings.businessName) { throw 'Update lost database settings.' }
   $web = (& docker ps -q --filter "label=com.docker.compose.project=$projectA" --filter 'label=com.docker.compose.service=web').Trim()
   $mounts = & docker inspect $web --format '{{json .Mounts}}' | ConvertFrom-Json

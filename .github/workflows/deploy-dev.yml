@@ -28,6 +28,7 @@ jobs:
         run: |
           node scripts/test-public-booking.cjs
           node scripts/test-admin-refresh.cjs
+          node scripts/test-admin-access.cjs
       - name: Check deployment recovery
         run: python3 scripts/test-dev-deploy.py
 

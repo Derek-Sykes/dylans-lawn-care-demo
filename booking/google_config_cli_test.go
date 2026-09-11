@@ -105,7 +105,7 @@ func TestGoogleConfigCLIPreservesExistingCredentialsAndOwnerState(t *testing.T) 
 	}
 	_ = a.store.putSecret("owner", Owner{"fixture-owner", "fixture@example.com", "fixture-calendar"})
 	_ = a.store.putSecret("google_tokens", GoogleTokens{"fixture-access", "fixture-refresh", a.now().Add(time.Hour), googleScopes})
-	bootstrap(t, a)
+	testIdentitySession(t, a, Owner{Sub: "fixture-owner", Email: "fixture@example.com"})
 	snapshot := func() map[string][]byte {
 		t.Helper()
 		out := map[string][]byte{}

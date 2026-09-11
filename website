@@ -179,10 +179,12 @@ private_git() (
 ensure_google_config() (
   # Keep secret-bearing variables inside this untraced subshell.
   set +x
-  local status temporary='' repository private_empty size private_json destination
-  if compose exec -T booking booking google-config status >/dev/null 2>&1; then return; else status=$?; fi
-  if (( status != 3 )); then
-    echo 'Could not check saved Google configuration. Run the logs command, resolve the local application error, and retry start.' >&2; return 1
+  local status operator_status temporary='' repository private_empty size private_json destination
+  if compose exec -T booking booking google-config status >/dev/null 2>&1; then status=0; else status=$?; fi
+  if compose exec -T booking booking operator-config status >/dev/null 2>&1; then operator_status=0; else operator_status=$?; fi
+  if (( status == 0 && operator_status == 0 )); then return; fi
+  if (( (status != 0 && status != 3) || (operator_status != 0 && operator_status != 3) )); then
+    echo 'Could not check saved Google configuration or operator access. Run the logs command, resolve the local application error, and retry start.' >&2; return 1
   fi
   type git >/dev/null 2>&1 || {
     echo 'First Google setup requires Git with access to Derek-Sykes/xsolutions-booking-private. Install/sign in to Git on this machine and retry start.' >&2; return 1;
@@ -227,12 +229,13 @@ ensure_google_config() (
     *) echo 'Git rewrites the private setup repository to an unexpected destination. Correct that repository URL rewrite in your Git settings, then retry start.' >&2; return 1 ;;
   esac
   echo 'Preparing Google connection using your existing Git access...'
-  if ! private_git clone --quiet --depth 1 --single-branch --branch main --no-tags --no-checkout \
+  if ! private_git clone --quiet --depth 1 --single-branch --branch dev --no-tags --no-checkout \
       "--template=$private_empty" "$private_url" "$repository" >/dev/null 2>&1; then
     echo 'Could not access private Google setup. Make sure the Git account on this machine has access to Derek-Sykes/xsolutions-booking-private, then retry start. Browser sign-in alone does not sign Git in.' >&2; return 1
   fi
+  if (( status == 3 )); then
   if ! size=$(private_git -C "$repository" cat-file -s HEAD:google-client.json 2>/dev/null) || [[ ! "$size" =~ ^[0-9]+$ ]] || (( size > 65536 )); then
-    echo 'The private repository needs a valid google-client.json on main (maximum 64 KiB). Ask its maintainer to correct the file, then retry start.' >&2; return 1
+    echo 'The private repository needs a valid google-client.json on dev (maximum 64 KiB). Ask its maintainer to correct the file, then retry start.' >&2; return 1
   fi
   if ! private_json=$(private_git -C "$repository" cat-file blob HEAD:google-client.json 2>/dev/null); then
     echo 'Could not read the Google setup file from the private repository. Ask its maintainer to check the file, then retry start.' >&2; return 1
@@ -243,6 +246,21 @@ ensure_google_config() (
   fi
   private_json=''
   echo 'Google connection configuration saved privately for this installation.'
+  fi
+  if (( operator_status == 3 )); then
+    if ! size=$(private_git -C "$repository" cat-file -s HEAD:operator-access.json 2>/dev/null) || [[ ! "$size" =~ ^[0-9]+$ ]] || (( size > 4096 )); then
+      echo 'The private repository needs operator-access.json on dev (maximum 4 KiB). Ask its maintainer to provision the approved operator identity.' >&2; return 1
+    fi
+    if ! private_json=$(private_git -C "$repository" cat-file blob HEAD:operator-access.json 2>/dev/null); then
+      echo 'Could not read private operator access configuration.' >&2; return 1
+    fi
+    if ! printf '%s' "$private_json" | compose exec -T booking booking operator-config import >/dev/null 2>&1; then
+      private_json=''
+      echo 'Operator access could not be imported. Existing accounts and calendar data were preserved.' >&2; return 1
+    fi
+    private_json=''
+    echo 'Approved operator access saved privately for this installation.'
+  fi
 )
 check_application() (
   docker build --target test "$ROOT/booking"
@@ -260,8 +278,11 @@ check_application() (
 show_site() {
   printf 'Public website: %s/\nAdmin workspace: %s/\n' "$PUBLIC_ORIGIN" "$ADMIN_ORIGIN"
   if [[ "$no_open" == false ]]; then
-    local url="$ADMIN_ORIGIN/#setup=$BOOTSTRAP_TOKEN"
-    if type powershell.exe >/dev/null 2>&1; then powershell.exe -NoProfile -Command 'Start-Process ($env:ADMIN_ORIGIN + "/#setup=" + $env:BOOTSTRAP_TOKEN)' >/dev/null 2>&1 || echo 'Could not open the browser. Run ./website open again.'
+    local url="$ADMIN_ORIGIN/" operator_status
+    if compose exec -T booking booking operator-config status >/dev/null 2>&1; then operator_status=0; else operator_status=$?; fi
+    if (( operator_status == 3 )); then url+="#setup=$BOOTSTRAP_TOKEN";
+    elif (( operator_status != 0 )); then echo 'Could not check operator access before opening the portal.' >&2; return 1; fi
+    if type powershell.exe >/dev/null 2>&1; then DYLAN_OPEN_URL="$url" powershell.exe -NoProfile -Command 'Start-Process $env:DYLAN_OPEN_URL' >/dev/null 2>&1 || echo 'Could not open the browser. Run ./website open again.'
     elif type open >/dev/null 2>&1; then open "$url" >/dev/null 2>&1 || echo 'Could not open the browser. Run ./website open on a desktop.'
     elif type xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 || echo 'Could not open the browser. Run ./website open on a desktop.'
     else echo 'Browser opening is unavailable here. Run ./website open on a desktop.'; fi

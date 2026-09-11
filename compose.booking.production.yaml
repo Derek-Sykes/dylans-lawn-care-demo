@@ -23,6 +23,9 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Set approved web OAuth client ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?Load from private server configuration}
       GOOGLE_OAUTH_MODE: web
+      # An identity allowlist, not a password or personal Google token.
+      OPERATOR_GOOGLE_SUB: ${OPERATOR_GOOGLE_SUB:-}
+      OPERATOR_GOOGLE_EMAIL: ${OPERATOR_GOOGLE_EMAIL:?Load approved operator email from private configuration}
     volumes:
       - booking-data:/data
     networks: [private, proxy]

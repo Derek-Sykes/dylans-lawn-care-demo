@@ -52,7 +52,7 @@ func TestCalendarMoveAndDurationReachOwnerAndAvailability(t *testing.T) {
 	a, f, b := syncedGoogleBooking(t)
 	start, end := instant("2026-09-14T15:30:00Z"), instant("2026-09-14T17:30:00Z")
 	changeGoogleTimes(f, b, start.Format(time.RFC3339), end.Format(time.RFC3339))
-	cookie, _ := bootstrap(t, a)
+	cookie, _ := testIdentitySession(t, a, Owner{Sub: "owner-sub", Email: "owner@example.com"})
 	w := request(a, true, "GET", "/api/admin/bookings", nil, cookie, "", "")
 	var reply struct {
 		Bookings          []Booking `json:"bookings"`
@@ -271,7 +271,7 @@ func TestCalendarReadFailureFailsClosedButOwnerRetainsSavedRecords(t *testing.T)
 	if _, _, err := a.createBooking(context.Background(), in); !errors.Is(err, errUnavailable) {
 		t.Fatal("submission was accepted without refreshing changed appointment times")
 	}
-	cookie, _ := bootstrap(t, a)
+	cookie, _ := testIdentitySession(t, a, Owner{Sub: "owner-sub", Email: "owner@example.com"})
 	w := request(a, true, "GET", "/api/admin/bookings", nil, cookie, "", "")
 	var reply struct {
 		Bookings          []Booking `json:"bookings"`

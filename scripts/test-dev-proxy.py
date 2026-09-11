@@ -107,6 +107,8 @@ def probe():
     status, headers, body = request("/api/admin/bootstrap", "POST", {"token": bootstrap}, origin=ORIGIN)
     assert status == 200
     session = json.loads(body)
+    assert session["authenticated"] is True and session["role"] == "bootstrap"
+    assert session["setupRequired"] is True and session["canManageAccess"] is False
     cookies = SimpleCookie()
     cookies.load(headers["Set-Cookie"])
     morsel = next(iter(cookies.values()))
@@ -117,21 +119,43 @@ def probe():
     settings = json.loads(body)
     assert request("/api/admin/settings", "PUT", settings, cookie=cookie, origin=ORIGIN)[0] == 403
     assert request("/api/admin/settings", "PUT", settings, cookie=cookie, csrf=csrf, origin=ORIGIN)[0] == 200
-    status, _, body = request("/api/admin/google/connect", "POST", {}, cookie=cookie, csrf=csrf, origin=ORIGIN)
+    # Setup permits initial configuration, but does not confer operator access.
+    # Identity sign-in is separate from the authenticated Calendar consent flow.
+    assert request("/api/admin/invitations", cookie=cookie)[0] == 403
+    assert request("/api/admin/invitations", "POST", {"email": "owner@example.com"},
+                   cookie=cookie, csrf=csrf, origin=ORIGIN)[0] == 403
+    assert request("/api/admin/google/connect", "POST", {}, origin=ORIGIN)[0] == 401
+    assert request("/api/admin/signin", "POST", {}, cookie=cookie,
+                   origin="https://attacker.invalid")[0] == 403
+    status, headers, body = request("/api/admin/signin", "POST", {}, cookie=cookie, csrf=csrf, origin=ORIGIN)
     assert status == 200
     authorization = urlsplit(json.loads(body)["url"])
     query = parse_qs(authorization.query)
     assert authorization.scheme == "https" and authorization.hostname == "accounts.google.com"
     assert query["redirect_uri"] == [ORIGIN + "/oauth/callback"]
     assert query["code_challenge_method"] == ["S256"]
+    assert len(query["code_challenge"][0]) == 43 and len(query["state"][0]) >= 32
+    assert query["scope"] == ["openid email"]
+    assert query["prompt"] == ["select_account"] and "access_type" not in query
+    binding_cookies = SimpleCookie()
+    binding_cookies.load(headers["Set-Cookie"])
+    binding = next(iter(binding_cookies.values()))
+    assert binding["secure"] and binding["httponly"] and binding["path"] == "/oauth/callback"
+    assert binding["samesite"].lower() == "lax"
+    binding_cookie = binding.key + "=" + binding.value
     # No browser follows the authorization URL. Candidate network also blocks egress.
     status, headers, _ = request("/oauth/callback?error=access_denied")
+    assert status == 303 and headers["Location"] == ORIGIN + "/admin/?google=failed"
+    denied_callback = "/oauth/callback?error=access_denied&state=" + query["state"][0]
+    status, headers, _ = request(denied_callback, cookie=binding_cookie)
+    assert status == 303 and headers["Location"] == ORIGIN + "/admin/?google=denied"
+    status, headers, _ = request(denied_callback, cookie=binding_cookie)
     assert status == 303 and headers["Location"] == ORIGIN + "/admin/?google=failed"
     config = json.loads(request("/api/public/config")[2])
     assert config["bookingEnabled"] is False
     for path in ("/api/admin/session", "/api/admin/settings", "/admin/", "/admin.js", "/oauth/callback"):
         assert request(path, direct=True)[0] == 404, "Public listener exposed " + path
-    print("PASS: trusted local HTTPS gateway, public/admin routing, assets, dispatch receipt, owner authentication, CSRF, OAuth callback and public-listener isolation.")
+    print("PASS: trusted local HTTPS gateway, public/admin routing, assets, dispatch receipt, setup/operator access boundaries, CSRF, identity-only Google sign-in, browser-bound one-use OAuth callback and public-listener isolation.")
 
 
 def main():

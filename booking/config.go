@@ -14,6 +14,7 @@ type Config struct {
 	PublicOrigin, AdminOrigin, AdminBasePath, DataDir, BootstrapToken, WebDir string
 	DeploymentRunID, DeploymentRunAttempt                                     string
 	ClientID, ClientSecret, OAuthMode                                         string
+	OperatorGoogleSub, OperatorGoogleEmail                                    string
 	AuthURL, TokenURL, UserInfoURL, CalendarURL, RevokeURL                    string
 	HTTPTimeout                                                               time.Duration
 }
@@ -22,6 +23,8 @@ func loadConfig() (Config, error) {
 	c := Config{PublicOrigin: os.Getenv("PUBLIC_ORIGIN"), AdminOrigin: os.Getenv("ADMIN_ORIGIN"), AdminBasePath: os.Getenv("ADMIN_BASE_PATH"), DataDir: os.Getenv("DATA_DIR"), BootstrapToken: os.Getenv("BOOTSTRAP_TOKEN"), WebDir: os.Getenv("WEB_DIR"), ClientID: os.Getenv("GOOGLE_CLIENT_ID"), ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"), OAuthMode: os.Getenv("GOOGLE_OAUTH_MODE"), HTTPTimeout: 15 * time.Second}
 	c.DeploymentRunID = os.Getenv("DEPLOYMENT_RUN_ID")
 	c.DeploymentRunAttempt = os.Getenv("DEPLOYMENT_RUN_ATTEMPT")
+	c.OperatorGoogleSub = os.Getenv("OPERATOR_GOOGLE_SUB")
+	c.OperatorGoogleEmail = os.Getenv("OPERATOR_GOOGLE_EMAIL")
 	if c.DataDir == "" {
 		c.DataDir = "/data"
 	}
@@ -68,6 +71,11 @@ func parseOrigin(raw string) (*url.URL, error) {
 func loopbackHost(host string) bool { ip := net.ParseIP(host); return ip != nil && ip.IsLoopback() }
 
 func validateConfig(c Config) error {
+	if c.OperatorGoogleSub != "" || c.OperatorGoogleEmail != "" {
+		if err := validateOperatorIdentity(OperatorIdentity{Schema: 1, GoogleSub: c.OperatorGoogleSub, Email: c.OperatorGoogleEmail}); err != nil {
+			return err
+		}
+	}
 	for _, value := range []string{c.DeploymentRunID, c.DeploymentRunAttempt} {
 		if len(value) > 20 || strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
 			return errors.New("deployment identifiers must be numeric and at most 20 digits")

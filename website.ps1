@@ -230,9 +230,11 @@ function Invoke-PrivateProcess([string]$Program, [string[]]$Arguments, [string]$
 }
 function Ensure-GoogleConfig {
   $arguments = (Get-Compose) + @('exec','-T','booking','booking','google-config')
+  $operatorArguments = (Get-Compose) + @('exec','-T','booking','booking','operator-config')
   $status = Invoke-PrivateProcess docker ($arguments + @('status'))
-  if ($status.Code -eq 0) { return }
-  if ($status.Code -ne 3) { throw 'Could not check saved Google configuration. Run the logs command, resolve the local application error, and retry start.' }
+  $operatorStatus = Invoke-PrivateProcess docker ($operatorArguments + @('status'))
+  if ($status.Code -eq 0 -and $operatorStatus.Code -eq 0) { return }
+  if ($status.Code -notin @(0,3) -or $operatorStatus.Code -notin @(0,3)) { throw 'Could not check saved Google configuration or operator access. Run the logs command, resolve the local application error, and retry start.' }
   if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
     throw 'First Google setup requires Git with access to the private repository Derek-Sykes/xsolutions-booking-private. Install/sign in to Git on this machine and retry start.'
   }
@@ -262,14 +264,15 @@ function Ensure-GoogleConfig {
       throw 'Git rewrites the private setup repository to an unexpected destination. Correct that repository URL rewrite in your Git settings, then retry start.'
     }
     Write-Host 'Preparing Google connection using your existing Git access...'
-    $clone = Invoke-PrivateProcess git ($gitOptions + @('clone','--quiet','--depth','1','--single-branch','--branch','main','--no-tags','--no-checkout',"--template=$empty",
+    $clone = Invoke-PrivateProcess git ($gitOptions + @('clone','--quiet','--depth','1','--single-branch','--branch','dev','--no-tags','--no-checkout',"--template=$empty",
       $privateURL,$repository))
     if ($clone.Code -ne 0) {
       throw 'Could not access private Google setup. Make sure the Git account on this machine has access to Derek-Sykes/xsolutions-booking-private, then retry start. Browser sign-in alone does not sign Git in.'
     }
+    if ($status.Code -eq 3) {
     $size = Invoke-PrivateProcess git ($gitOptions + @('-C',$repository,'cat-file','-s','HEAD:google-client.json'))
     if ($size.Code -ne 0 -or $size.Text.Trim() -notmatch '^\d+$' -or [long]$size.Text.Trim() -gt 65536) {
-      throw 'The private repository needs a valid google-client.json on main (maximum 64 KiB). Ask its maintainer to correct the file, then retry start.'
+      throw 'The private repository needs a valid google-client.json on dev (maximum 64 KiB). Ask its maintainer to correct the file, then retry start.'
     }
     $blob = Invoke-PrivateProcess git ($gitOptions + @('-C',$repository,'cat-file','blob','HEAD:google-client.json'))
     if ($blob.Code -ne 0) { throw 'Could not read the Google setup file from the private repository. Ask its maintainer to check the file, then retry start.' }
@@ -277,6 +280,19 @@ function Ensure-GoogleConfig {
     $import = Invoke-PrivateProcess docker ($arguments + @('import')) $privateJSON
     if ($import.Code -ne 0) { throw 'The private Google setup could not be imported. Ask its maintainer to check the registered client configuration, then retry start.' }
     Write-Host 'Google connection configuration saved privately for this installation.'
+    }
+    if ($operatorStatus.Code -eq 3) {
+      $size = Invoke-PrivateProcess git ($gitOptions + @('-C',$repository,'cat-file','-s','HEAD:operator-access.json'))
+      if ($size.Code -ne 0 -or $size.Text.Trim() -notmatch '^\d+$' -or [long]$size.Text.Trim() -gt 4096) {
+        throw 'The private repository needs operator-access.json on dev (maximum 4 KiB). Ask its maintainer to provision the approved operator identity.'
+      }
+      $blob = Invoke-PrivateProcess git ($gitOptions + @('-C',$repository,'cat-file','blob','HEAD:operator-access.json'))
+      if ($blob.Code -ne 0) { throw 'Could not read private operator access configuration.' }
+      $privateJSON = $blob.Text; $blob.Text = $null
+      $import = Invoke-PrivateProcess docker ($operatorArguments + @('import')) $privateJSON
+      if ($import.Code -ne 0) { throw 'Operator access could not be imported. Existing accounts and calendar data were preserved.' }
+      Write-Host 'Approved operator access saved privately for this installation.'
+    }
   } finally {
     $privateJSON = $null
     if (Test-Path -LiteralPath $temporary) {
@@ -317,7 +333,10 @@ function Show-Site {
   Write-Host "Public website: $env:PUBLIC_ORIGIN/"
   Write-Host "Admin workspace: $env:ADMIN_ORIGIN/"
   if (-not $NoOpen) {
-    $url = "$env:ADMIN_ORIGIN/#setup=$env:BOOTSTRAP_TOKEN"
+    $url = "$env:ADMIN_ORIGIN/"
+    $operatorStatus = Invoke-PrivateProcess docker ((Get-Compose) + @('exec','-T','booking','booking','operator-config','status'))
+    if ($operatorStatus.Code -eq 3) { $url += "#setup=$env:BOOTSTRAP_TOKEN" }
+    elseif ($operatorStatus.Code -ne 0) { throw 'Could not check operator access before opening the portal.' }
     try {
       if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { Start-Process $url }
       elseif (Get-Command xdg-open -ErrorAction SilentlyContinue) { & xdg-open $url 2>$null | Out-Null }

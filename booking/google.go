@@ -101,6 +101,40 @@ func (g *Google) authorizationURL(state, verifier, redirect string) string {
 	v := url.Values{"client_id": {g.cfg.ClientID}, "redirect_uri": {redirect}, "response_type": {"code"}, "scope": {googleScopes}, "access_type": {"offline"}, "prompt": {"consent"}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}}
 	return g.cfg.AuthURL + "?" + v.Encode()
 }
+func (g *Google) signInURL(state, verifier, redirect string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	v := url.Values{"client_id": {g.cfg.ClientID}, "redirect_uri": {redirect}, "response_type": {"code"}, "scope": {"openid email"}, "prompt": {"select_account"}, "state": {state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}}
+	return g.cfg.AuthURL + "?" + v.Encode()
+}
+func (g *Google) userIdentity(ctx context.Context, token string) (Owner, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", g.cfg.UserInfoURL, nil)
+	if err != nil {
+		return Owner{}, errGoogle
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := g.client.Do(req)
+	if err != nil {
+		return Owner{}, errGoogle
+	}
+	defer res.Body.Close()
+	var info struct {
+		Sub      string `json:"sub"`
+		Email    string `json:"email"`
+		Verified bool   `json:"email_verified"`
+	}
+	if res.StatusCode != 200 || json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&info) != nil || !info.Verified || info.Sub == "" || validateOperatorIdentity(OperatorIdentity{Schema: 1, GoogleSub: info.Sub, Email: info.Email}) != nil {
+		return Owner{}, errGoogle
+	}
+	return Owner{Sub: info.Sub, Email: normalizeAccessEmail(info.Email)}, nil
+}
+func (g *Google) signIn(ctx context.Context, code, verifier, redirect string) (Owner, error) {
+	reply, err := g.tokenRequest(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {redirect}})
+	if err != nil {
+		return Owner{}, err
+	}
+	// Identity-only access is short-lived and never replaces Calendar credentials.
+	return g.userIdentity(ctx, reply.AccessToken)
+}
 
 func (g *Google) clientSecret() (string, error) {
 	if g.cfg.ClientSecret != "" {
@@ -184,6 +218,12 @@ func validScopes(scope string) bool {
 	return (full || set[eventsScope]) && (full || set[busyScope] || set["https://www.googleapis.com/auth/calendar.events.freebusy"] || set["https://www.googleapis.com/auth/calendar.readonly"])
 }
 func (g *Google) connect(ctx context.Context, code, verifier, redirect string) error {
+	return g.connectAs(ctx, code, verifier, redirect, "")
+}
+func (g *Google) connectAs(ctx context.Context, code, verifier, redirect, expectedSub string) error {
+	return g.connectAuthorized(ctx, code, verifier, redirect, expectedSub, nil, nil)
+}
+func (g *Google) connectAuthorized(ctx context.Context, code, verifier, redirect, expectedSub string, authorize func() bool, authorizeTx func(*sql.Tx) bool) error {
 	reply, err := g.tokenRequest(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {redirect}})
 	if err != nil {
 		return err
@@ -191,26 +231,18 @@ func (g *Google) connect(ctx context.Context, code, verifier, redirect string) e
 	if !validScopes(reply.Scope) {
 		return errScopes
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", g.cfg.UserInfoURL, nil)
+	info, err := g.userIdentity(ctx, reply.AccessToken)
 	if err != nil {
-		return errGoogle
+		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+reply.AccessToken)
-	res, err := g.client.Do(req)
-	if err != nil {
-		return errGoogle
-	}
-	defer res.Body.Close()
-	var info struct {
-		Sub      string `json:"sub"`
-		Email    string `json:"email"`
-		Verified bool   `json:"email_verified"`
-	}
-	if res.StatusCode != 200 || json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&info) != nil || !info.Verified || info.Sub == "" || info.Email == "" || len(info.Sub) > 255 || len(info.Email) > 254 {
-		return errGoogle
+	if expectedSub != "" && expectedSub != info.Sub {
+		return errWrongOwner
 	}
 	g.ops.Lock()
 	defer g.ops.Unlock()
+	if authorize != nil && !authorize() {
+		return errWrongOwner
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	owner, err := g.owner()
@@ -255,10 +287,24 @@ func (g *Google) connect(ctx context.Context, code, verifier, redirect string) e
 	}
 	owner.Sub = info.Sub
 	owner.Email = info.Email
-	if err = g.store.putSecret("owner", owner); err != nil {
+	tx, err := g.store.db.Begin()
+	if err != nil {
 		return err
 	}
-	if err = g.store.putSecret("google_tokens", tokens); err != nil {
+	defer tx.Rollback()
+	if authorizeTx != nil && !authorizeTx(tx) {
+		return errWrongOwner
+	}
+	if err = g.store.writeTxSecret(tx, "owner", owner); err != nil {
+		return err
+	}
+	if err = g.store.writeTxSecret(tx, "google_tokens", tokens); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("INSERT INTO meta(key,value) VALUES('bootstrap_disabled','true') ON CONFLICT(key) DO UPDATE SET value='true'"); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return g.store.putJSON("google_error", "")
@@ -345,56 +391,11 @@ func (g *Google) authorizedRequest(ctx context.Context, method, path string, in,
 	}
 	return res.StatusCode, nil
 }
-func (g *Google) Busy(ctx context.Context, start, end time.Time) ([]Busy, error) {
-	g.ops.RLock()
-	defer g.ops.RUnlock()
-	busy, err := g.busy(ctx, start, end)
-	if err != nil {
-		if errors.Is(err, errClientSecretRequired) {
-			_ = g.store.putJSON("google_error", clientConfigurationError)
-		} else {
-			_ = g.store.putJSON("google_error", "Calendar availability could not be checked. Reconnect Google and check that the booking calendar is still available.")
-		}
-	} else {
-		_ = g.store.putJSON("google_error", "")
-	}
-	return busy, err
-}
-func (g *Google) busy(ctx context.Context, start, end time.Time) ([]Busy, error) {
-	owner, err := g.owner()
-	if err != nil || owner.CalendarID == "" {
-		return nil, errGoogle
-	}
-	request := map[string]any{"timeMin": start.UTC().Format(time.RFC3339), "timeMax": end.UTC().Format(time.RFC3339), "items": []map[string]string{{"id": "primary"}, {"id": owner.CalendarID}}}
-	var out struct {
-		Calendars map[string]struct {
-			Busy   []Busy            `json:"busy"`
-			Errors []json.RawMessage `json:"errors"`
-		} `json:"calendars"`
-	}
-	_, err = g.request(ctx, "POST", "/freeBusy", request, &out)
-	if err != nil {
-		return nil, err
-	}
-	all := []Busy{}
-	for _, id := range []string{"primary", owner.CalendarID} {
-		c, ok := out.Calendars[id]
-		if !ok || len(c.Errors) > 0 {
-			return nil, errGoogle
-		}
-		for _, b := range c.Busy {
-			if b.Start.IsZero() || !b.End.After(b.Start) {
-				return nil, errGoogle
-			}
-			all = append(all, b)
-		}
-	}
-	return all, nil
-}
 
 type googleEvent struct {
 	ID               string   `json:"id"`
 	Status           string   `json:"status"`
+	Transparency     string   `json:"transparency"`
 	Recurrence       []string `json:"recurrence"`
 	RecurringEventID string   `json:"recurringEventId"`
 	Start            struct {
@@ -460,14 +461,20 @@ func (g *Google) Sync(ctx context.Context, b Booking) error {
 		return errGoogle
 	}
 	buffer := b.BlockedEnd.Sub(b.End)
-	busy, err := g.busy(ctx, b.Start.Add(-buffer), b.BlockedEnd)
+	settings, err := g.store.settings()
 	if err != nil {
 		return err
 	}
-	for i := range busy {
-		busy[i].End = busy[i].End.Add(buffer)
+	margin := max(buffer, time.Duration(externalBufferMinutes(settings))*time.Minute)
+	busy, err := g.externalBusy(ctx, b.Start.Add(-margin), b.End.Add(margin))
+	if err != nil {
+		return err
 	}
-	if conflicts(Slot{b.Start, b.End}, int(buffer/time.Minute), busy) {
+	local, err := g.store.localBusyExcept(b.Start.Add(-margin), b.End.Add(margin), b.ID)
+	if err != nil {
+		return err
+	}
+	if conflicts(Slot{b.Start, b.End}, 0, calendarProtection(settings, int(buffer/time.Minute), busy, local)) {
 		return errConflict
 	}
 	title := "Service appointment"

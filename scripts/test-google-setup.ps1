@@ -38,7 +38,7 @@ function RunCase($Engine,[string]$Name,[string]$Expected,[bool]$Success) {
 try {
   New-Item -ItemType Directory -Path $fixture -Force | Out-Null
   New-Item -ItemType Directory -Path (Join-Path $qaRoot '.local') -Force | Out-Null
-  Native git @('-C',$fixture,'init','--quiet','--initial-branch=main')
+  Native git @('-C',$fixture,'init','--quiet','--initial-branch=dev')
   Native git @('-C',$fixture,'config','user.name','Synthetic setup test')
   Native git @('-C',$fixture,'config','user.email','setup-test@example.invalid')
   WriteUTF8 (Join-Path $fixture 'README.md') 'Synthetic client configuration only.'
@@ -114,9 +114,9 @@ compose() { shift 3; docker exec -i "$TEST_BOOKING_CONTAINER" "$@"; }
       if ((Get-Item -LiteralPath $offline).Parent.FullName -ne (Get-Item -LiteralPath $qaRoot).FullName) { throw 'Fixture restore escaped the test directory.' }
       Move-Item -LiteralPath $offline -Destination $fixture
     }
-    RunCase $engine 'missing file and cleanup' 'needs a valid google-client.json on main' $false
+    RunCase $engine 'missing file and cleanup' 'needs a valid google-client.json on dev' $false
     CommitFixture ('x' * 65537)
-    RunCase $engine 'oversize file and cleanup' 'needs a valid google-client.json on main' $false
+    RunCase $engine 'oversize file and cleanup' 'needs a valid google-client.json on dev' $false
     CommitFixture ('{"client_id":"wrong.apps.googleusercontent.com","client_secret":"' + $dummySecret + '"}')
     RunCase $engine 'mismatched registered client and no output leak' 'could not be imported' $false
     CommitFixture ('not-json-' + $dummySecret)
@@ -126,7 +126,15 @@ compose() { shift 3; docker exec -i "$TEST_BOOKING_CONTAINER" "$@"; }
     foreach ($key in @('GIT_CONFIG_COUNT','GIT_CONFIG_KEY_0','GIT_CONFIG_VALUE_0')) { [Environment]::SetEnvironmentVariable($key,$null) }
     $valid=@{installed=@{client_id=$clientID;client_secret=$dummySecret}} | ConvertTo-Json -Depth 3
     CommitFixture $valid
-    RunCase $engine 'UTF-8 stdin import and private temporary cleanup' 'configuration saved privately' $true
+    $operatorFile = Join-Path $fixture 'operator-access.json'
+    if (Test-Path -LiteralPath $operatorFile) { Remove-Item -LiteralPath $operatorFile; CommitFixture '' }
+    RunCase $engine 'missing operator identity fails closed after client import' 'needs operator-access.json on dev' $false
+    WriteUTF8 $operatorFile '{"schema":1,"googleSub":"fixture-operator","email":"operator@example.com","refreshToken":"fixture-disallowed-token"}'
+    CommitFixture ''
+    RunCase $engine 'personal credentials rejected from operator configuration' 'Operator access could not be imported' $false
+    WriteUTF8 $operatorFile '{"schema":1,"googleSub":"fixture-operator","email":"operator@example.com"}'
+    CommitFixture ''
+    RunCase $engine 'UTF-8 stdin operator import and private temporary cleanup' 'operator access saved privately' $true
     $env:GIT_CONFIG_COUNT='1'; $env:GIT_CONFIG_KEY_0='url.https://invalid.example/blocked.insteadOf'; $env:GIT_CONFIG_VALUE_0=$fixtureURL
     RunCase $engine 'configured install skips all private Git work' '' $true
     foreach ($key in @('GIT_CONFIG_COUNT','GIT_CONFIG_KEY_0','GIT_CONFIG_VALUE_0')) { [Environment]::SetEnvironmentVariable($key,$null) }

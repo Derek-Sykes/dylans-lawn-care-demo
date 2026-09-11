@@ -93,7 +93,7 @@ func TestSharedOriginAdminPageAndAuthentication(t *testing.T) {
 		t.Fatal("admin entry did not canonicalize to the portal while keeping OAuth outcome")
 	}
 	w = request(a, true, "GET", "/admin/", nil, nil, "", "")
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "Owner portal") || !strings.Contains(w.Body.String(), `href="./" aria-label="Owner portal home"`) {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Booking portal") || !strings.Contains(w.Body.String(), `href="./" aria-label="Booking portal home"`) {
 		t.Fatal("admin page or relative portal navigation missing")
 	}
 	for _, path := range []string{"/admin.css", "/admin.js"} {
@@ -149,6 +149,7 @@ func TestWebOAuthReturnsToAdminOnSuccessAndFailure(t *testing.T) {
 	if w.Header().Get("Location") != a.cfg.AdminOrigin+"/admin/?google=failed" || f.tokenCalls != 1 {
 		t.Fatal("replayed OAuth callback reached provider or escaped owner portal")
 	}
+	cookie, csrf = testIdentitySession(t, a, Owner{Sub: "owner-sub", Email: "owner@example.com"})
 	q, binding = beginOAuth(t, a, cookie, csrf)
 	w = request(a, true, "GET", "/oauth/callback?error=access_denied&state="+q.Get("state"), nil, binding, "", "")
 	if w.Header().Get("Location") != a.cfg.AdminOrigin+"/admin/?google=denied" || f.tokenCalls != 1 {

@@ -48,6 +48,12 @@ func newApp(c Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if c.OperatorGoogleEmail != "" {
+		if err = s.importOperatorIdentity(OperatorIdentity{Schema: 1, GoogleSub: c.OperatorGoogleSub, Email: c.OperatorGoogleEmail}); err != nil {
+			s.close()
+			return nil, err
+		}
+	}
 	a := &App{cfg: c, store: s, now: time.Now, wake: make(chan struct{}, 1), rate: &rateLimiter{entries: map[string]rateEntry{}}}
 	pub, _ := url.Parse(c.PublicOrigin)
 	admin, _ := url.Parse(c.AdminOrigin)
@@ -165,7 +171,7 @@ func (a *App) middleware(next http.Handler, admin bool) http.Handler {
 		if write {
 			group, limit = "write", 30
 		}
-		if r.URL.Path == "/api/admin/bootstrap" || r.URL.Path == "/api/admin/google/connect" {
+		if r.URL.Path == "/api/admin/bootstrap" || r.URL.Path == "/api/admin/google/connect" || r.URL.Path == "/api/admin/signin" || r.URL.Path == "/api/admin/invitations/accept" {
 			group, limit = "auth", 10
 		}
 		if r.URL.Path == "/api/public/bookings" {
@@ -176,9 +182,9 @@ func (a *App) middleware(next http.Handler, admin bool) http.Handler {
 			writeError(w, &apiError{429, "rate_limited", "Too many requests. Please wait a minute and try again."})
 			return
 		}
-		if admin && strings.HasPrefix(r.URL.Path, "/api/admin/") && r.URL.Path != "/api/admin/session" && r.URL.Path != "/api/admin/bootstrap" {
+		if admin && strings.HasPrefix(r.URL.Path, "/api/admin/") && r.URL.Path != "/api/admin/session" && r.URL.Path != "/api/admin/bootstrap" && r.URL.Path != "/api/admin/signin" && r.URL.Path != "/api/admin/invitations/accept" {
 			s, _, err := a.session(r)
-			if err != nil && r.URL.Path != "/api/admin/google/connect" {
+			if err != nil {
 				writeError(w, &apiError{401, "sign_in_required", "Please sign in to the owner portal."})
 				return
 			}
@@ -200,7 +206,7 @@ func (a *App) publicHandler() http.Handler {
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"businessName": v.BusinessName, "timeZone": v.TimeZone, "slotMinutes": v.SlotMinutes, "estimateMinutes": v.EstimateMinutes, "bufferMinutes": v.BufferMinutes, "minNoticeHours": v.MinNoticeHours, "horizonDays": v.HorizonDays, "services": services, "bookingEnabled": a.calendar.Connected()})
+		writeJSON(w, 200, map[string]any{"businessName": v.BusinessName, "timeZone": v.TimeZone, "slotMinutes": v.SlotMinutes, "estimateMinutes": v.EstimateMinutes, "bufferMinutes": v.BufferMinutes, "externalBufferMinutes": externalBufferMinutes(v), "minNoticeHours": v.MinNoticeHours, "horizonDays": v.HorizonDays, "services": services, "bookingEnabled": a.calendar.Connected()})
 	})
 	mux.HandleFunc("GET /api/public/slots", func(w http.ResponseWriter, r *http.Request) {
 		slots, v, err := a.availableSlots(r.Context(), r.URL.Query().Get("date"), r.URL.Query().Get("kind"))
@@ -243,11 +249,21 @@ func (a *App) adminHandler() http.Handler {
 	mux.HandleFunc("GET /version.json", a.handleVersion)
 	mux.HandleFunc("GET /api/admin/session", a.handleSession)
 	mux.HandleFunc("POST /api/admin/bootstrap", a.handleBootstrap)
+	mux.HandleFunc("POST /api/admin/signin", a.handleSignIn)
+	mux.HandleFunc("GET /api/admin/invitations", a.handleInvitations)
+	mux.HandleFunc("POST /api/admin/invitations", a.handleInvitationCreate)
+	mux.HandleFunc("DELETE /api/admin/invitations/{id}", a.handleInvitationRevoke)
+	mux.HandleFunc("POST /api/admin/invitations/accept", a.handleInvitationAccept)
 	mux.HandleFunc("POST /api/admin/logout", a.handleLogout)
 	mux.HandleFunc("POST /api/admin/google/connect", a.handleConnect)
 	mux.HandleFunc("POST /api/admin/google/configure", a.handleGoogleConfigure)
 	mux.HandleFunc("GET /oauth/callback", a.handleCallback)
 	mux.HandleFunc("POST /api/admin/google/disconnect", func(w http.ResponseWriter, r *http.Request) {
+		s, _, _ := a.session(r)
+		if !a.canConnectCalendar(s) {
+			writeError(w, &apiError{403, "calendar_owner_required", "Only the calendar owner can change this connection."})
+			return
+		}
 		if err := a.google.disconnect(r.Context()); err != nil {
 			writeError(w, err)
 			return
@@ -397,7 +413,7 @@ func (a *App) saveSettings(v Settings) (Settings, error) {
 	defer a.bookingMu.Unlock()
 	// Older clients omit these arrays. Preserve any existing blocks; an explicit
 	// empty array is the supported way to remove them.
-	if v.BlockedWeekly == nil || v.BlockedDates == nil || v.EstimateMinutes == 0 {
+	if v.BlockedWeekly == nil || v.BlockedDates == nil || v.EstimateMinutes == 0 || v.ExternalBufferMinutes == nil {
 		previous, err := a.store.settings()
 		if err != nil {
 			return v, err
@@ -407,6 +423,9 @@ func (a *App) saveSettings(v Settings) (Settings, error) {
 		}
 		if v.BlockedDates == nil {
 			v.BlockedDates = previous.BlockedDates
+		}
+		if v.ExternalBufferMinutes == nil {
+			v.ExternalBufferMinutes = previous.ExternalBufferMinutes
 		}
 		if v.EstimateMinutes == 0 {
 			v.EstimateMinutes = previous.EstimateMinutes
